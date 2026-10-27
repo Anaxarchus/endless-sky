@@ -298,7 +298,7 @@ diff --git a/source/ShipyardPanel.h b/source/ShipyardPanel.h
 diff --git a/source/ModHarness.cpp b/source/ModHarness.cpp
 --- a/source/ModHarness.cpp
 +++ b/source/ModHarness.cpp
-@@ -2996,9 +2996,8 @@
+@@ -3000,9 +3000,8 @@
  	const Ship *ship = FindModel(model);
  	if(!context || !ship || !context->player->GetPlanet())
  		return 0;

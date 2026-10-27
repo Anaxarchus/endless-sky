@@ -243,7 +243,9 @@ namespace {
 	constexpr double FRAME_MS = 1000. / 60.;
 	// Each mod's share of the engine steps: time in its hooks during Step, which
 	// is time the frame waits for. Logged every FRAME_REPORT_STEPS in dev builds.
+#ifndef NDEBUG
 	constexpr int64_t FRAME_REPORT_STEPS = 3600;
+#endif
 	struct FrameShare {
 		double totalMs = 0.;
 		double worstMs = 0.;
@@ -819,12 +821,14 @@ namespace {
 		// Keys 1-9 press the buttons.
 		bool PressDigit(SDL_Keycode key)
 		{
-			if(key >= '1' && key <= '9' && key - '1' < static_cast<int>(panel.buttons.size()))
-			{
-				Press(key - '1');
-				return true;
-			}
-			return false;
+			// SDL_Keycode is signed in SDL2 and unsigned in SDL3.
+			if(key < '1' || key > '9')
+				return false;
+			const int index = static_cast<int>(key - '1');
+			if(index >= static_cast<int>(panel.buttons.size()))
+				return false;
+			Press(index);
+			return true;
 		}
 
 		// The table starts over at the top when the panel gets a new title.
