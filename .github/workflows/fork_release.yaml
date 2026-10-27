@@ -483,6 +483,10 @@ jobs:
             echo "::error title=Mod loader::libesdado.dylib is not universal (arm64 and x86_64): $archs"
             exit 1
           fi
+          # zig signs only the arm64 slice (Apple Silicon requires a signature,
+          # Intel does not), so a universal dylib can read as unsigned. Sign it
+          # ad hoc here so both slices carry a signature.
+          codesign --force --sign - "$lib"
           codesign --verify --verbose=2 "$lib"
           codesign -dv "$lib" 2>&1 | grep -E '^(Signature|Identifier|Format)' || true
           if [ -e "$app/Contents/_CodeSignature/CodeResources" ]; then
