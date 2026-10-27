@@ -23,32 +23,44 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 class Outfit;
 class Panel;
-class System;
 class PlayerInfo;
 class Point;
 class Ship;
 class ShipEvent;
+class System;
 class UI;
 
 
 
-// Runs mods written in DadoScript (see modding/README.md). The harness and its
-// script engine are compiled in only when the game is built with ES_DADO_MODS;
-// otherwise every function here does nothing.
+// The game's side of the native modding API (source/modding/es_api.h, and
+// docs/modding-api.md): it finds the mod loaders (shared libraries in a
+// "modloaders" folder of the resources or the config folder), hands them the
+// host table, runs their hooks and shows what their mods ask for. Without a
+// mod loader, every function here does nothing and the game plays as usual.
 //
 // Everything here runs on the main thread: in flight while the calculation
 // thread is paused, and from the planet screen, map and mod panels, which only
-// run while it is stopped. The script engine belongs to the thread that made it.
+// run while it is stopped. The loaders are called only from that thread.
 class ModHarness {
 public:
+	// Open the mod loaders, once the game's data has loaded and before a pilot
+	// is loaded or a menu shown, so "mod loaders" is right from the start. The
+	// loaders load their mods later, at the first hook, when there is a world.
+	static void Init();
 	// Run the mods' hooks for this engine step: on_day for each new day, on_enter
 	// on arriving in a system, then on_step. The first call (or the first UI
-	// call) starts the harness and loads the mods found in each resource or
-	// plugin folder's "dado" folder. Ships the mods spawn go into newShips;
-	// events are this step's ship events, used to credit the player's kills.
+	// call) starts the harness: it has the mod loaders load their mods from the
+	// enabled resource and plugin folders (opening the loaders first, if Init
+	// has not). Ships the mods spawn go
+	// into newShips.
 	static void Step(PlayerInfo &player, const std::list<std::shared_ptr<Ship>> &ships,
-		std::list<std::shared_ptr<Ship>> &newShips, const std::list<ShipEvent> &events, int step);
-	// End the script engine and every mod in it.
+		std::list<std::shared_ptr<Ship>> &newShips, int step);
+	// Keep what the mods need from this engine step's ship events: the
+	// player's kills and the ships destroyed (mod API 9). Called every step,
+	// also when Step does not run (paused, or a panel over the flight view),
+	// so nothing is lost; the next Step's hooks see it.
+	static void CollectEvents(const std::list<ShipEvent> &events);
+	// End every mod, and close the mod loaders.
 	static void Shutdown();
 	// The player landed: start the harness if need be and run on_enter for the
 	// system, so mods can put up planet buttons even for a pilot loaded on a planet.
@@ -71,7 +83,7 @@ public:
 	static void PlanetButton(PlayerInfo &player, UI &ui);
 	// The panel mods show on the planet screen. Like the bank and trading
 	// panels, the planet screen swaps it into its content area and lets the keys
-	// it does not use through. Null when the harness is not built in.
+	// it does not use through. Null when there is no mod loader.
 	static std::shared_ptr<Panel> NewPlanetPanel(PlayerInfo &player);
 	// Whether a mod has a panel open, and closing it (the player left it).
 	static bool PanelOpen();
@@ -88,14 +100,20 @@ public:
 	static void OutfitterButton(size_t i, PlayerInfo &player, UI &ui, const std::vector<Ship *> &ships,
 		const Outfit *outfit);
 
-	// Whether the harness is compiled into this build, and how many mods it has
-	// loaded so far (0 until it starts). Safe from any thread; the player's
-	// "dado harness" and "dado mods loaded" conditions read these.
-	static bool IsBuiltIn();
+	// How many mod loaders are open (set by Init, once the game's data has
+	// loaded) and how many mods they have loaded so far (0 until the first hook
+	// has them load their mods; updated every engine step). Safe from any thread; the player's
+	// "mod loaders" and "mods loaded" conditions read these.
+	static int64_t LoaderCount();
 	static int64_t LoadedCount();
 
-	// Set a ship's levels, clamped to [0, maximum]. Used by the C surface the
-	// harness calls (modding/include/es_host.h); a friend of Entity.
+	// Set a ship's levels, clamped to [0, maximum]. Used by the host table the
+	// mod loaders call (source/modding/es_api.h); a friend of Entity.
 	static void SetHull(Ship &ship, double value);
 	static void SetShields(Ship &ship, double value);
+	// What a shipyard charges for a brand-new ship of this model, when no used
+	// hull or outfits are in stock: its chassis and every outfit at full price
+	// (what stock depreciation answers when it holds no records). Mod API 9's
+	// model_cost, and the price of PlayerInfo::DeliverShip.
+	static int64_t NewShipCost(const Ship *model);
 };

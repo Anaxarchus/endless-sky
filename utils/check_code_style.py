@@ -116,6 +116,8 @@ singleLineComment = re.compile("^//(/<?)?")
 reversed_includes = ["\"opengl.h\"", "\"SDL.h\""]
 # The list of files for which the include checks are skipped.
 exclude_include_check = ["source/main.cpp"]
+# Pure C headers, which C rules govern (block comments, "(void)" prototypes): not checked.
+exclude_files = ["source/modding/es_api.h"]
 
 
 # A class representing error messages.
@@ -615,7 +617,7 @@ if __name__ == '__main__':
 			files += glob.glob(pattern, recursive=True)
 	else:
 		files = glob.glob('source/**/*.cpp', recursive=True) + glob.glob('source/**/*.h', recursive=True) + glob.glob('tests/**/*.cpp', recursive=True) + glob.glob('tests/**/*.h', recursive=True)
-	files.sort()
+	files = sorted(file for file in files if file.replace("\\", "/") not in exclude_files)
 
 	for file in files:
 		f = open(file, "r", newline='')

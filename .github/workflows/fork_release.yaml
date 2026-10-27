@@ -1,0 +1,502 @@
+# Fork release: builds Linux, Windows and macOS packages and publishes them as a
+# GitHub Release. Not part of upstream Endless Sky; see docs/releasing.md.
+#
+# The build jobs mirror cd_release.yaml as closely as possible (same caches,
+# vcpkg commit, presets and utils/ scripts), so upstream changes there can be
+# copied over. Differences from cd_release.yaml are marked "Fork:".
+
+name: Fork Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. v0.11.4-mods.2 (becomes the tag; a "v" is added if missing)'
+        required: true
+        type: string
+      apply_patches:
+        description: 'Apply the optional gameplay patches in patches/'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Fork: works out the version, tag and options once for every other job.
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      apply_patches: ${{ steps.version.outputs.apply_patches }}
+    steps:
+      - name: Work out version
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_APPLY: ${{ inputs.apply_patches }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            raw="$REF_NAME"
+            apply=true
+          else
+            raw="$INPUT_VERSION"
+            apply="$INPUT_APPLY"
+          fi
+          if ! [[ "$raw" =~ ^v?[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+            echo "::error title=Bad version::\"$raw\" is not a valid version (letters, digits, '.', '_', '+', '-')."
+            exit 1
+          fi
+          version="${raw#v}"
+          tag="v$version"
+          if [[ "$tag" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          [ "$apply" = true ] || apply=false
+          # A manual run releases the commit it was started on; refuse if the tag
+          # already exists and points somewhere else.
+          if [ "$EVENT" != push ]; then
+            if existing=$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha 2>/dev/null); then
+              if [ "$existing" != "$GITHUB_SHA" ]; then
+                echo "::error title=Tag exists::$tag already points at $existing, not at $GITHUB_SHA. Pick another version."
+                exit 1
+              fi
+            fi
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "apply_patches=$apply"
+          } >> "$GITHUB_OUTPUT"
+          echo "Tag: $tag, file version: $version, prerelease: $prerelease, patches: $apply"
+
+
+  # Fork: the mod loader host test (tests/modloader/run.sh).
+  test_modloader:
+    name: Mod loader test
+    needs: setup
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Apply optional gameplay patches
+        if: needs.setup.outputs.apply_patches == 'true'
+        run: |
+          ./patches/apply.sh apply || { echo "::error title=Patch failed::A patch in patches/ does not apply to this commit. Refresh it (see patches/README.md) or release with apply_patches=false."; exit 1; }
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev
+      - name: Run mod loader test
+        run: ./tests/modloader/run.sh
+
+
+  release_appimage_x64:
+    name: AppImage x64
+    needs: setup
+    runs-on: ubuntu-22.04
+    env:
+      ARCH: x86_64
+      OUTPUT: Endless_Sky-${{ needs.setup.outputs.version }}-x86_64.AppImage
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          fetch-depth: '10'
+      - name: Apply optional gameplay patches
+        if: needs.setup.outputs.apply_patches == 'true'
+        run: |
+          ./patches/apply.sh apply || { echo "::error title=Patch failed::A patch in patches/ does not apply to this commit. Refresh it (see patches/README.md) or release with apply_patches=false."; exit 1; }
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxmu-dev libxi-dev libgl-dev libglu1-mesa-dev libgles2-mesa-dev libminizip-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libfuse2 autoconf autoconf-archive automake libtool
+      - name: Find cache keys
+        run: |
+          echo 'RESTORE_KEYS<<EOF' > restore_keys.txt
+          git log --pretty=format:'${{ runner.os }}-cd-%H' -n 10 | tail -n+2 >> restore_keys.txt
+          echo -e '\nEOF' >> restore_keys.txt
+          cat restore_keys.txt >> "$GITHUB_ENV"
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          save: 'false'
+          restore-keys: ${{ env.RESTORE_KEYS }}
+          append-timestamp: 'false'
+      - name: Adjust version strings
+        run: ./utils/cd_update_versions.sh
+      - name: Setup vcpkg cache
+        uses: TAServers/vcpkg-cache@v3
+        id: vcpkg-cache
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: lukka/get-cmake@v4.2.3
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: '89dc8be6dbcf18482a5a1bf86a2f4615c939b0fb'
+      - name: Run CMake
+        run: |
+          cmake --preset linux-release
+          cmake --build build --preset linux-ci-release
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      - name: Package Application
+        run: ./utils/build_appimage.sh build/release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUTPUT }}
+          path: ${{ env.OUTPUT }}
+          if-no-files-found: error
+
+
+  release_windows_x64:
+    name: Windows x64
+    needs: setup
+    runs-on: windows-2025
+    env:
+      OUTPUT_ZIP: EndlessSky-win64-${{ needs.setup.outputs.version }}.zip
+      OUTPUT_EXE: EndlessSky-${{ needs.setup.outputs.version }}-win64-setup.exe
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      # Fork: the Windows runner checks out with CRLF line endings, which the LF
+      # patches would not apply to.
+      - name: Keep LF line endings
+        if: needs.setup.outputs.apply_patches == 'true'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          fetch-depth: '10'
+      - name: Apply optional gameplay patches
+        if: needs.setup.outputs.apply_patches == 'true'
+        shell: bash
+        run: |
+          sh ./patches/apply.sh apply || { echo "::error title=Patch failed::A patch in patches/ does not apply to this commit. Refresh it (see patches/README.md) or release with apply_patches=false."; exit 1; }
+      - name: Install dependencies
+        run: |
+          choco install nsis.portable
+      - name: Find cache keys
+        run: |
+          echo 'RESTORE_KEYS<<EOF' > restore_keys.txt
+          git log --pretty=format:'${{ runner.os }}-cd-%H' -n 10 | tail -n+2 >> restore_keys.txt
+          echo -e '\nEOF' >> restore_keys.txt
+          cat restore_keys.txt >> "$GITHUB_ENV"
+        shell: bash
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          save: 'false'
+          restore-keys: ${{ env.RESTORE_KEYS }}
+          append-timestamp: 'false'
+      - name: Adjust version strings
+        run: ./utils/cd_update_versions.sh
+        shell: bash
+      - name: Setup vcpkg cache
+        uses: TAServers/vcpkg-cache@v3
+        id: vcpkg-cache
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: lukka/get-cmake@v4.2.3
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: '89dc8be6dbcf18482a5a1bf86a2f4615c939b0fb'
+      - name: Run CMake
+        run: |
+          cmake --preset mingw-release -DCPACK_PACKAGE_FILE_NAME="EndlessSky-${{ needs.setup.outputs.version }}-win64-setup"
+          cmake --build build --preset mingw-ci-release
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      - name: Package Application
+        run: |
+          cmake --install build/release
+          7z a ${{ env.OUTPUT_ZIP }} "./install/release/*"
+          cpack --config build/release/CPackConfig.cmake
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUTPUT_ZIP }}
+          path: ${{ env.OUTPUT_ZIP }}
+          if-no-files-found: error
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUTPUT_EXE }}
+          path: ${{ env.OUTPUT_EXE }}
+          if-no-files-found: error
+
+
+  release_macos_x64:
+    name: MacOS x64
+    needs: setup
+    runs-on: macos-15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          fetch-depth: '10'
+      - name: Apply optional gameplay patches
+        if: needs.setup.outputs.apply_patches == 'true'
+        run: |
+          ./patches/apply.sh apply || { echo "::error title=Patch failed::A patch in patches/ does not apply to this commit. Refresh it (see patches/README.md) or release with apply_patches=false."; exit 1; }
+      - name: Find cache keys
+        run: |
+          echo 'RESTORE_KEYS<<EOF' > restore_keys.txt
+          git log --pretty=format:'${{ runner.os }}-cd-%H' -n 10 | tail -n+2 >> restore_keys.txt
+          echo -e '\nEOF' >> restore_keys.txt
+          cat restore_keys.txt >> "$GITHUB_ENV"
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          save: 'false'
+          restore-keys: ${{ env.RESTORE_KEYS }}
+          append-timestamp: 'false'
+      - name: Adjust version strings
+        run: ./utils/cd_update_versions.sh
+      - name: Setup vcpkg cache
+        uses: TAServers/vcpkg-cache@v3
+        id: vcpkg-cache
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: lukka/get-cmake@v4.2.3
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: '89dc8be6dbcf18482a5a1bf86a2f4615c939b0fb'
+      - name: Run CMake
+        run: |
+          cmake --preset macos-release
+          cmake --build build --preset macos-ci-release
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      - name: Zip artifact
+        run: |
+          cd build/release
+          7z a macos-artifact-x64.zip "Endless Sky.app"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifact-x64
+          path: build/release/macos-artifact-x64.zip
+          if-no-files-found: error
+
+
+  release_macos_arm:
+    name: MacOS ARM
+    needs: setup
+    runs-on: macos-15
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          fetch-depth: '10'
+      - name: Apply optional gameplay patches
+        if: needs.setup.outputs.apply_patches == 'true'
+        run: |
+          ./patches/apply.sh apply || { echo "::error title=Patch failed::A patch in patches/ does not apply to this commit. Refresh it (see patches/README.md) or release with apply_patches=false."; exit 1; }
+      - name: Find cache keys
+        run: |
+          echo 'RESTORE_KEYS<<EOF' > restore_keys.txt
+          git log --pretty=format:'${{ runner.os }}-arm-ci-%H' -n 10 | tail -n+2 >> restore_keys.txt
+          echo -e '\nEOF' >> restore_keys.txt
+          cat restore_keys.txt >> "$GITHUB_ENV"
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          save: 'false'
+          restore-keys: ${{ env.RESTORE_KEYS }}
+          append-timestamp: 'false'
+      - name: Adjust version strings
+        run: ./utils/cd_update_versions.sh
+      - name: Setup vcpkg cache
+        uses: TAServers/vcpkg-cache@v3
+        id: vcpkg-cache
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: lukka/get-cmake@v4.2.3
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: '89dc8be6dbcf18482a5a1bf86a2f4615c939b0fb'
+      - name: Run CMake
+        run: |
+          cmake --preset macos-arm-release
+          cmake --build build --preset macos-arm-ci-release
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      - name: Zip artifact
+        run: |
+          cd build/release
+          7z a macos-artifact-arm.zip "Endless Sky.app"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifact-arm
+          path: build/release/macos-artifact-arm.zip
+          if-no-files-found: error
+
+
+  release_macos:
+    name: MacOS Universal
+    runs-on: macos-15
+    needs: [setup, release_macos_arm, release_macos_x64]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OUTPUT: Endless-Sky-${{ needs.setup.outputs.version }}
+    steps:
+      # Fork: each artifact is downloaded into its own folder (x64/, arm/) so
+      # that the zip lands at x64/macos-artifact-x64.zip.
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-artifact-x64
+          path: x64
+      - name: Extract x64 artifact
+        run: |
+          cd x64
+          7z x macos-artifact-x64.zip
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-artifact-arm
+          path: arm
+      - name: Extract arm artifact
+        run: |
+          cd arm
+          7z x macos-artifact-arm.zip
+      - name: Create universal binary
+        run: |
+          cp -r "arm/Endless Sky.app" "Endless Sky.app"
+          lipo -create -output "Endless Sky.app/Contents/MacOS/Endless Sky" "arm/Endless Sky.app/Contents/MacOS/Endless Sky" "x64/Endless Sky.app/Contents/MacOS/Endless Sky"
+          for lib in "Endless Sky.app/Contents/Frameworks/"*; do lipo -create -output "$lib" "arm/Endless Sky.app/Contents/Frameworks/$(basename "$lib")" "x64/Endless Sky.app/Contents/Frameworks/$(basename "$lib")"; done
+      - name: Package Application
+        run: |
+          mkdir "${{ env.OUTPUT }}"
+          cp -r "Endless Sky.app" "${{ env.OUTPUT }}"
+          ln -s /Applications "${{ env.OUTPUT }}"
+          until hdiutil create -ov -fs HFS+ -format UDZO -imagekey zlib-level=9 -srcfolder "${{ env.OUTPUT }}" "${{ github.workspace }}/${{ env.OUTPUT }}.dmg"; do echo "hdiutil create failed, retrying..."; done
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.OUTPUT }}.dmg
+          path: ${{ env.OUTPUT }}.dmg
+          if-no-files-found: error
+
+
+  # Fork: publishes everything above as a GitHub Release.
+  release:
+    name: GitHub Release
+    runs-on: ubuntu-latest
+    needs: [setup, test_modloader, release_appimage_x64, release_windows_x64, release_macos]
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.setup.outputs.tag }}
+      VERSION: ${{ needs.setup.outputs.version }}
+      PRERELEASE: ${{ needs.setup.outputs.prerelease }}
+      APPLY_PATCHES: ${{ needs.setup.outputs.apply_patches }}
+      LOADER_REPO: Anaxarchus/es-modloader
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          # The packages only: AppImage, Windows zip and installer, macOS dmg
+          # (not the intermediate macos-artifact-* zips).
+          pattern: Endless*
+          merge-multiple: true
+          path: dist
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f SHA256SUMS
+          ls -l
+          count=$(find . -maxdepth 1 -type f | wc -l)
+          if [ "$count" -ne 4 ]; then
+            echo "::error title=Missing packages::Expected 4 packages, found $count."
+            exit 1
+          fi
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Write release notes
+        run: |
+          set -euo pipefail
+          api=$(sed -n 's/^#define ES_API_VERSION \([0-9][0-9]*\).*/\1/p' source/modding/es_api.h)
+          api_min=$(sed -n 's/^#define ES_API_MIN_VERSION \([0-9][0-9]*\).*/\1/p' source/modding/es_api.h)
+          [ -n "$api" ] || { echo "::error::ES_API_VERSION not found in source/modding/es_api.h"; exit 1; }
+          server="${GITHUB_SERVER_URL:-https://github.com}"
+          repo_url="$server/$GITHUB_REPOSITORY"
+          {
+            echo "Endless Sky $VERSION, built from this fork (commit \`${GITHUB_SHA:0:12}\`). It includes the native mod API; without a mod loader installed it plays like upstream Endless Sky$( [ "$APPLY_PATCHES" = true ] && echo ", apart from the gameplay patches below" )."
+            echo
+            echo "## Downloads"
+            echo
+            echo "| Platform | File |"
+            echo "|---|---|"
+            echo "| Linux x86_64 | \`Endless_Sky-$VERSION-x86_64.AppImage\` (make it executable, then run it) |"
+            echo "| Windows x64 | \`EndlessSky-win64-$VERSION.zip\` (portable) or \`EndlessSky-$VERSION-win64-setup.exe\` (installer) |"
+            echo "| macOS (universal: Apple Silicon and Intel) | \`Endless-Sky-$VERSION.dmg\` |"
+            echo
+            echo "\`SHA256SUMS\` lists the checksums: \`sha256sum -c SHA256SUMS --ignore-missing\` (on macOS, \`shasum -a 256 -c SHA256SUMS --ignore-missing\`)."
+            echo
+            echo "## Gameplay patches"
+            echo
+            if [ "$APPLY_PATCHES" = true ]; then
+              echo "These optional patches from [\`patches/\`]($repo_url/tree/$TAG/patches) are applied in this build:"
+              echo
+              for p in patches/*.patch; do
+                n=$(basename "$p")
+                desc=$(awk -F'|' -v n="\`$n\`" '{ gsub(/^ +| +$/, "", $2) } $2 == n { d = $3; gsub(/^ +| +$/, "", d); sub(/\. .*/, ".", d); print d; exit }' patches/README.md)
+                echo "- \`${n%.patch}\`${desc:+: $desc}"
+              done
+            else
+              echo "None: this build has no gameplay patches applied."
+            fi
+            echo
+            echo "## Mods"
+            echo
+            echo "Mod API version: **$api** (\`ES_API_VERSION\` in [\`source/modding/es_api.h\`]($repo_url/blob/$TAG/source/modding/es_api.h)); the game accepts loaders built for API $api_min or later."
+            echo
+            echo "This build does not include a mod loader. Get a mod loader at [github.com/$LOADER_REPO]($server/$LOADER_REPO/releases), and put it in a \`modloaders\` folder in the game's config folder (the one that holds \`plugins/\` and \`saves/\`). See [docs/modding-api.md]($repo_url/blob/$TAG/docs/modding-api.md)."
+            echo
+            echo "## macOS: unsigned build"
+            echo
+            echo "The macOS build is not signed or notarized, so macOS blocks it the first time. Drag the app to Applications, then right-click (or Control-click) it and choose **Open**, and **Open** again in the dialog. On macOS 15 and later, open it once, then go to **System Settings > Privacy & Security** and click **Open Anyway**."
+            echo
+            echo "---"
+            echo "Built by [this workflow run]($repo_url/actions/runs/${GITHUB_RUN_ID:-0})."
+          } > notes.md
+          cat notes.md
+      - name: Create release
+        run: |
+          set -euo pipefail
+          flags=()
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A re-run: refresh the notes and replace the files.
+            gh release edit "$TAG" --title "Endless Sky $VERSION" --notes-file notes.md --prerelease="$PRERELEASE"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "Endless Sky $VERSION" --notes-file notes.md --target "$GITHUB_SHA" "${flags[@]}"
+          fi

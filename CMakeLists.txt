@@ -13,7 +13,6 @@ cmake_dependent_option(ES_USE_SYSTEM_LIBRARIES "Use system libraries instead of 
 cmake_dependent_option(ES_CREATE_BUNDLE "Create a Bundle instead of an executable. Not suitable for development purposes." OFF APPLE OFF)
 # This is normally set by CTest, but we predefine it here so that it's recognized during vcpkg configuration.
 option(BUILD_TESTING "" ON)
-option(ES_DADO_MODS "Build the Dado mod harness into the game (needs the Dado toolchain; see modding/README.md)." OFF)
 
 # Support Debug and Release configurations.
 set(CMAKE_CONFIGURATION_TYPES "Debug" "Release" CACHE STRING "" FORCE)
@@ -167,11 +166,6 @@ add_subdirectory(source)
 # Create an interface library that contains common libraries for the game and unit tests.
 add_library(ExternalLibraries INTERFACE)
 target_link_libraries(EndlessSkyLib PUBLIC ExternalLibraries)
-
-# The Dado mod harness, when asked for.
-if(ES_DADO_MODS)
-	include(modding/Dado.cmake)
-endif()
 
 # Enable sanitizers on debug builds, depending on platform support.
 if(NOT WIN32 AND NOT CYGWIN)

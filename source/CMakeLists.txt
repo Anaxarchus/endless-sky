@@ -436,6 +436,11 @@ target_sources(EndlessSkyLib PRIVATE
 	image/SpriteLoadManager.h
 	image/SpriteSet.cpp
 	image/SpriteSet.h
+	modding/es_api.h
+	modding/ModLoaders.cpp
+	modding/ModLoaders.h
+	modding/ModState.cpp
+	modding/ModState.h
 	shader/BatchDrawList.cpp
 	shader/BatchDrawList.h
 	shader/BatchShader.cpp

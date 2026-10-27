@@ -526,7 +526,7 @@ public:
 	int AddOutfit(const Outfit *outfit, int count);
 	// Integrated outfits are installed for good: they cannot be uninstalled,
 	// sold, moved to cargo or storage, or plundered, and the ship carries them
-	// lighter. (Mods integrate outfits through the Dado harness.) How many of this
+	// lighter. (Mods integrate outfits through the mod harness.) How many of this
 	// outfit are integrated, and how many of the installed ones are not.
 	int IntegratedCount(const Outfit *outfit) const;
 	int RemovableCount(const Outfit *outfit) const;

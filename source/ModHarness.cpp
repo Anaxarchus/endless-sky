@@ -15,9 +15,66 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include "ModHarness.h"
 
+#include "Color.h"
+#include "DataFile.h"
+#include "DataNode.h"
+#include "Date.h"
+#include "DialogPanel.h"
+#include "text/DisplayText.h"
+#include "EsUuid.h"
+#include "Files.h"
+#include "shader/FillShader.h"
+#include "Fleet.h"
+#include "text/Font.h"
+#include "text/FontSet.h"
+#include "text/Format.h"
+#include "GameData.h"
+#include "GameEvent.h"
+#include "Government.h"
+#include "Hardpoint.h"
+#include "Interface.h"
+#include "text/Layout.h"
+#include "shader/LineShader.h"
+#include "Logger.h"
+#include "Message.h"
+#include "Messages.h"
+#include "Mission.h"
+#include "modding/ModLoaders.h"
+#include "modding/ModState.h"
+#include "Outfit.h"
+#include "Panel.h"
+#include "Planet.h"
+#include "PlayerInfo.h"
+#include "Plugin.h"
+#include "PluginManager.h"
+#include "Point.h"
+#include "Port.h"
+#include "Rectangle.h"
+#include "shader/RingShader.h"
+#include "Screen.h"
 #include "Ship.h"
+#include "ShipEvent.h"
+#include "Shop.h"
+#include "StellarObject.h"
+#include "System.h"
+#include "TextArea.h"
+#include "text/Truncate.h"
+#include "UI.h"
+#include "Variant.h"
+#include "Weapon.h"
+#include "text/WrappedText.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <limits>
+#include <map>
+#include <sstream>
+#include <vector>
 
 using namespace std;
 
@@ -37,175 +94,26 @@ void ModHarness::SetShields(Ship &ship, double value)
 
 
 
-#ifndef ES_DADO_MODS
-
-bool ModHarness::IsBuiltIn()
+// What stockDepreciation.Value(*model, day) answers when it holds no records:
+// the base model's chassis and each outfit at full price.
+int64_t ModHarness::NewShipCost(const Ship *model)
 {
-	return false;
+	if(!model)
+		return 0;
+	const Ship *base = GameData::Ships().Get(model->TrueModelName());
+	int64_t cost = base->ChassisCost();
+	for(const auto &[outfit, count] : model->Outfits())
+		cost += count * outfit->Cost();
+	return cost;
 }
 
 
-
-int64_t ModHarness::LoadedCount()
-{
-	return 0;
-}
-
-
-
-void ModHarness::Step(PlayerInfo &, const list<shared_ptr<Ship>> &, list<shared_ptr<Ship>> &,
-	const list<ShipEvent> &, int)
-{
-}
-
-
-
-void ModHarness::Shutdown()
-{
-}
-
-
-
-void ModHarness::Landed(PlayerInfo &)
-{
-}
-
-
-
-void ModHarness::ShipsReplaced()
-{
-}
-
-
-
-void ModHarness::DrawMap(const PlayerInfo &, const Point &, double)
-{
-}
-
-
-
-void ModHarness::DrawMapDetails(const System *, double)
-{
-}
-
-
-
-string ModHarness::PlanetButtonLabel()
-{
-	return string();
-}
-
-
-
-void ModHarness::PlanetButton(PlayerInfo &, UI &)
-{
-}
-
-
-
-shared_ptr<Panel> ModHarness::NewPlanetPanel(PlayerInfo &)
-{
-	return nullptr;
-}
-
-
-
-bool ModHarness::PanelOpen()
-{
-	return false;
-}
-
-
-
-void ModHarness::ClosePanel()
-{
-}
-
-
-
-vector<string> ModHarness::OutfitterButtons()
-{
-	return {};
-}
-
-
-
-bool ModHarness::OutfitterButtonActive(size_t, PlayerInfo &, const vector<Ship *> &, const Outfit *)
-{
-	return false;
-}
-
-
-
-void ModHarness::OutfitterButton(size_t, PlayerInfo &, UI &, const vector<Ship *> &, const Outfit *)
-{
-}
-
-#else
-
-#include "es_host.h"
-// dadoc writes esmod.h without a C++ guard.
-extern "C" {
-#include "esmod.h"
-}
-
-#include "Color.h"
-#include "DataFile.h"
-#include "DataNode.h"
-#include "Date.h"
-#include "DialogPanel.h"
-#include "EsUuid.h"
-#include "shader/FillShader.h"
-#include "Fleet.h"
-#include "text/Font.h"
-#include "text/FontSet.h"
-#include "GameData.h"
-#include "GameEvent.h"
-#include "Government.h"
-#include "Hardpoint.h"
-#include "Interface.h"
-#include "shader/LineShader.h"
-#include "Logger.h"
-#include "Message.h"
-#include "Messages.h"
-#include "Outfit.h"
-#include "Panel.h"
-#include "Planet.h"
-#include "PlayerInfo.h"
-#include "Port.h"
-#include "Plugin.h"
-#include "PluginManager.h"
-#include "Point.h"
-#include "Rectangle.h"
-#include "shader/RingShader.h"
-#include "Screen.h"
-#include "ShipEvent.h"
-#include "StellarObject.h"
-#include "System.h"
-#include "TextArea.h"
-#include "UI.h"
-#include "Variant.h"
-#include "Weapon.h"
-#include "text/DisplayText.h"
-#include "text/Layout.h"
-#include "text/Truncate.h"
-#include "text/WrappedText.h"
-
-#include <atomic>
-#include <chrono>
-#include <cmath>
-#include <cstdio>
-#include <cstring>
-#include <filesystem>
-#include <map>
-#include <sstream>
-#include <vector>
 
 namespace {
 	// Lookups cached for one run of hooks: one engine step (every mod's hooks in
 	// it), or one hook the UI ran. The world does not change under a run except
 	// through the mods' own calls, and the calls that change what a cache holds
-	// clear it (see "Changing the API" in modding/README.md).
+	// clear it (see "Changing the API" in docs/modding-api.md).
 	struct Caches {
 		// The player's ships that are not destroyed, in fleet order, and by UUID.
 		bool fleetBuilt = false;
@@ -218,6 +126,8 @@ namespace {
 		map<string, double, less<>> tagStrength;
 		// fleet_stat answers.
 		map<pair<const Fleet *, string>, double> fleetStats;
+		// Mod API 9: the models each planet's shipyards sell, sorted by true name.
+		map<const Planet *, vector<const Ship *>> shipyards;
 	};
 
 	// The world a hook may see. It exists only while a hook runs.
@@ -239,7 +149,8 @@ namespace {
 	};
 	Context *context = nullptr;
 
-	enum class State { UNSTARTED, RUNNING, FAILED };
+	// IDLE: started, but there is no mod loader, so there is nothing to do.
+	enum class State { UNSTARTED, RUNNING, IDLE };
 	State state = State::UNSTARTED;
 	// Read by condition getters, which may run on another thread than the engine's.
 	atomic<int64_t> loadedCount = 0;
@@ -269,7 +180,25 @@ namespace {
 	{
 		galaxy.clear();
 		fleetNames.clear();
+		// Events may also open or close shipyards.
+		if(context)
+			context->cache.shipyards.clear();
 	}
+
+	// Mod API 9: ships destroyed in the player's system, for es_losses. Filled
+	// from every engine step's events (CollectEvents), also steps whose hooks
+	// do not run, and emptied once a step's hooks have run. Bounded, so a long
+	// pause or panel cannot grow it without end.
+	constexpr size_t MAX_LOSSES = 4096;
+	struct Loss {
+		string model;
+		string government;
+		bool byPlayer = false;
+	};
+	vector<Loss> stepLosses;
+	// Ships already counted as lost: a ship can receive DESTROY more than once.
+	// Held weakly, so a new ship at a reused address is not mistaken for one.
+	map<const Ship *, weak_ptr<Ship>> lostShips;
 
 	// How long each mod's hooks take, by mod and hook. A call slower than
 	// SLOW_HOOK_MS is logged, then again only when one is twice as slow as the
@@ -282,9 +211,33 @@ namespace {
 		double reportedMs = 0.;
 	};
 	map<pair<string, string>, HookTiming> timings;
+	// When the open hook began. Which mod it is for, and whether its calls act
+	// for that mod, is the loaders' bookkeeping (ModLoaders::BeginHook).
 	chrono::steady_clock::time_point hookStart;
-	// The mod whose hook is running ("" between hooks).
-	string currentMod;
+
+	// The mod loaders, opened the first time the game needs them.
+	ModLoaders loaders;
+	bool loadersFound = false;
+	// Read by condition getters, like loadedCount.
+	atomic<int64_t> loaderCount = 0;
+
+	// The host table the loaders call (defined at the end of this file).
+	const EsHost &Host();
+
+	// The mod a mod-scoped call acts for: the one whose hook the calling loader
+	// has open and owns, or null, and then the call does nothing.
+	const char *RunningMod()
+	{
+		static bool warned = false;
+		const char *mod = loaders.RunningMod();
+		if(!mod && !warned)
+		{
+			warned = true;
+			Logger::Log("A mod loader made a call for a mod outside a hook of a mod it runs; the call was ignored."
+				" Later calls like it are ignored without this message.", Logger::Level::WARNING);
+		}
+		return mod;
+	}
 
 	// The frame budget: the engine steps 60 times a second.
 	constexpr double FRAME_MS = 1000. / 60.;
@@ -330,7 +283,7 @@ namespace {
 #ifndef NDEBUG
 		if(windowSteps < FRAME_REPORT_STEPS)
 			return;
-		string line = "Dado mods, share of each frame over the last " + to_string(windowSteps / 60) + " s (average, worst step):";
+		string line = "Mods, share of each frame over the last " + to_string(windowSteps / 60) + " s (average, worst step):";
 		for(auto &[mod, share] : frameShares)
 		{
 			line += "\n\t" + mod + ": " + FramePercent(share.windowMs / windowSteps) + ", " + FramePercent(share.windowWorstMs);
@@ -354,7 +307,7 @@ namespace {
 		explicit CallTimer(const char *name) : name(name), start(chrono::steady_clock::now()) {}
 		~CallTimer()
 		{
-			CallStat &stat = callStats[make_pair(currentMod, name)];
+			CallStat &stat = callStats[make_pair(loaders.TimedName(), name)];
 			++stat.calls;
 			stat.ms += chrono::duration<double, milli>(chrono::steady_clock::now() - start).count();
 		}
@@ -373,6 +326,10 @@ namespace {
 		const System *to = nullptr;
 		Color color;
 		string label;
+		// A marker draws a ring around its system; a label (mod API 9) does not.
+		bool ring = true;
+		// Mod API 9: the ring's size, as a multiple of a marker's (map_ring).
+		double scale = 1.;
 	};
 	map<string, vector<Overlay>> overlays;
 
@@ -390,8 +347,8 @@ namespace {
 	// Outfitter buttons, by mod (mod API 5).
 	map<string, string> outfitterButtons;
 
-	// A string handed back to the harness lives until the next one: the
-	// harness copies it into the script at once.
+	// A string handed back to a loader lives until the next one (es_api.h's
+	// ownership rule: until the next call into the game).
 	string returned;
 	const char *Return(string value)
 	{
@@ -454,6 +411,8 @@ namespace {
 		// Mod API 7: shown on its own full screen, and the row shown as chosen (-1 for none).
 		bool full = false;
 		int selected = -1;
+		// Mod API 8: line charts at the top of the screen's sidebar, by label.
+		vector<pair<string, vector<double>>> charts = {};
 	};
 
 	// "a\tb\tc" as its cells.
@@ -576,49 +535,101 @@ namespace {
 		}
 	}
 
+	// Mod API 9: note the ships this step's events destroyed, each ship once.
+	// The player destroyed one when the actor is one of the player's ships, or
+	// fire of the player's government (weapon hits name only the government).
+	void CollectLosses(const list<ShipEvent> &events)
+	{
+		for(auto it = lostShips.begin(); it != lostShips.end(); )
+			if(it->second.expired())
+				it = lostShips.erase(it);
+			else
+				++it;
+		const Government *playerGovernment = GameData::PlayerGovernment();
+		for(const ShipEvent &event : events)
+		{
+			const shared_ptr<Ship> &target = event.Target();
+			if(!(event.Type() & ShipEvent::DESTROY) || !target)
+				continue;
+			auto [it, inserted] = lostShips.try_emplace(target.get(), target);
+			if(!inserted)
+			{
+				if(!it->second.expired())
+					continue;
+				it->second = target;
+			}
+			const Government *government = event.TargetGovernment();
+			const shared_ptr<Ship> &actor = event.Actor();
+			bool byPlayer = (actor && actor->IsYours())
+				|| (playerGovernment && event.ActorGovernment() == playerGovernment);
+			if(stepLosses.size() >= MAX_LOSSES)
+				continue;
+			stepLosses.push_back(Loss{target->TrueModelName(), government ? government->TrueName() : string(), byPlayer});
+		}
+	}
+
+	// Open the mod loaders, once: those in the game's resources, then those in
+	// the user's config folder (which replace any of the same file name).
+	void FindLoaders()
+	{
+		if(loadersFound)
+			return;
+		loadersFound = true;
+		loaders.Load({Files::Resources() / "modloaders", Files::Config() / "modloaders"}, Host());
+		loaderCount = static_cast<int64_t>(loaders.Count());
+	}
+
 	void Start(PlayerInfo &player)
 	{
-		if(int code = esmod_init())
+		FindLoaders();
+		if(loaders.Empty())
 		{
-			Logger::Log("Dado mod harness did not start (code " + to_string(code) + ").", Logger::Level::ERROR);
-			state = State::FAILED;
+			// No mod loaders: the game plays as it would without this harness.
+			state = State::IDLE;
 			return;
 		}
 		state = State::RUNNING;
 		lastDay = player.GetDate().DaysSinceEpoch();
 		lastSystem = nullptr;
 
-		// Every resource and plugin folder may hold mods in its "dado" folder, one .js file each.
-		// A mod is named by its file; as with data, a later source's mod replaces an earlier one's.
-		map<string, filesystem::path> mods;
+		// Every loader gets the enabled sources in load order: the resources
+		// folder (named ""), then each enabled plugin's folder and name. Each
+		// loader decides what to load from them.
+		map<filesystem::path, string> pluginNames;
+		for(const auto &it : PluginManager::Get())
+			if(it.second.IsValid() && it.second.enabled)
+				pluginNames[it.second.path] = it.second.name;
+		vector<string> paths;
+		vector<string> names;
 		for(const filesystem::path &source : GameData::Sources())
 		{
-			filesystem::path folder = source / "dado";
-			error_code error;
-			if(!filesystem::is_directory(folder, error))
-				continue;
-			for(const filesystem::directory_entry &entry : filesystem::directory_iterator(folder, error))
-				if(entry.is_regular_file() && entry.path().extension() == ".js")
-				{
-					string name = entry.path().stem().string();
-					auto it = mods.find(name);
-					if(it != mods.end())
-						Logger::Log("Dado mod \"" + name + "\" in " + folder.string() + " replaces the one in "
-							+ it->second.parent_path().string() + ".", Logger::Level::INFO);
-					mods[name] = entry.path();
-				}
+			auto it = pluginNames.find(source);
+			paths.push_back(ModLoaders::Utf8(source));
+			names.push_back(it != pluginNames.end() ? it->second
+				: source == Files::Resources() ? string() : ModLoaders::Utf8(source.filename()));
 		}
-		for(const auto &[name, file] : mods)
+		vector<const char *> pathArray;
+		vector<const char *> nameArray;
+		for(size_t i = 0; i < paths.size(); ++i)
 		{
-			filesystem::path stem = file;
-			stem.replace_extension();
-			esmod_load(stem.string().c_str(), name.c_str());
+			pathArray.push_back(paths[i].c_str());
+			nameArray.push_back(names[i].c_str());
 		}
-		int found = static_cast<int>(mods.size());
-		loadedCount = esmod_count();
-		Logger::Log("Dado mod harness: " + to_string(loadedCount.load()) + " of " + to_string(found) + " mod(s) loaded.",
-			Logger::Level::INFO);
+		const int32_t count = static_cast<int32_t>(paths.size());
+		loaders.Each([&](const EsLoader &loader) {
+			if(loader.load_mods)
+				loader.load_mods(count, pathArray.data(), nameArray.data());
+		});
+		loadedCount = loaders.ModCount();
+		Logger::Log("Mod loaders: " + to_string(loaders.Count()) + " loader(s), "
+			+ to_string(loadedCount.load()) + " mod(s) loaded.", Logger::Level::INFO);
 	}
+
+	// The pilot the mods' world belongs to (ModState::Generation).
+	uint64_t pilotGeneration = 0;
+
+	// Forget what the mods put up for another pilot (defined below).
+	void CheckPilot(const PlayerInfo &player);
 
 	// Whether the days since the last step are days that passed in play (a jump
 	// or a takeoff is one day) rather than another pilot or save: then the mods
@@ -630,6 +641,25 @@ namespace {
 		lastDay = today;
 		lastSystem = nullptr;
 		return false;
+	}
+
+	// The loaders' on_enter: the player is now in `system`.
+	void EnterHook(const System *system)
+	{
+		const string &name = system->TrueName();
+		loaders.Each([&name](const EsLoader &loader) {
+			if(loader.enter)
+				loader.enter(name.c_str());
+		});
+	}
+
+	// The player clicked mod `mod`'s planet button.
+	void PlanetButtonHook(const string &mod)
+	{
+		loaders.ForMod(mod, [&mod](const EsLoader &loader) {
+			if(loader.planet_button)
+				loader.planet_button(mod.c_str());
+		});
 	}
 
 	// Run a hook from the UI, with a world but no ships in flight. With a UI, it
@@ -646,7 +676,7 @@ namespace {
 	template <class Hook>
 	void RunUIHook(PlayerInfo &player, UI *ui, const vector<Ship *> *outfitterShips, Hook hook)
 	{
-		if(state == State::FAILED)
+		if(state == State::IDLE)
 			return;
 		Context current;
 		current.player = &player;
@@ -657,7 +687,10 @@ namespace {
 		if(state == State::UNSTARTED)
 			Start(player);
 		if(state == State::RUNNING)
+		{
+			CheckPilot(player);
 			hook();
+		}
 		context = outer;
 	}
 
@@ -811,14 +844,24 @@ namespace {
 				return;
 			UI::PlaySound(UI::UISound::NORMAL);
 			string mod = panel.mod;
-			RunUIHook(player, GetUI(), [&mod, i]() { esmod_panel_row(mod.c_str(), i); });
+			RunUIHook(player, GetUI(), [&mod, i]() {
+				loaders.ForMod(mod, [&](const EsLoader &loader) {
+					if(loader.panel_row)
+						loader.panel_row(mod.c_str(), i);
+				});
+			});
 		}
 
 		void PressHeader(int column)
 		{
 			UI::PlaySound(UI::UISound::NORMAL);
 			string mod = panel.mod;
-			RunUIHook(player, GetUI(), [&mod, column]() { esmod_panel_header(mod.c_str(), column); });
+			RunUIHook(player, GetUI(), [&mod, column]() {
+				loaders.ForMod(mod, [&](const EsLoader &loader) {
+					if(loader.panel_header)
+						loader.panel_header(mod.c_str(), column);
+				});
+			});
 		}
 
 		void Press(int i)
@@ -836,12 +879,17 @@ namespace {
 				if(it != planetButtons.end())
 				{
 					string mod = it->first;
-					RunUIHook(player, GetUI(), [&mod]() { esmod_planet_button(mod.c_str()); });
+					RunUIHook(player, GetUI(), [&mod]() { PlanetButtonHook(mod); });
 				}
 				return;
 			}
 			string mod = panel.mod;
-			RunUIHook(player, GetUI(), [&mod, i]() { esmod_panel(mod.c_str(), i); });
+			RunUIHook(player, GetUI(), [&mod, i]() {
+				loaders.ForMod(mod, [&](const EsLoader &loader) {
+					if(loader.panel)
+						loader.panel(mod.c_str(), i);
+				});
+			});
 		}
 
 		PlayerInfo &player;
@@ -985,7 +1033,8 @@ namespace {
 			FillShader::Fill(Point((left + right) / 2., Screen::Top() + PAD + 28.), Point(right - left, 1.), dim);
 			TrackTitle();
 			if(!panel.columns.empty())
-				DrawTable(Rectangle::WithCorners(Point(left, Screen::Top() + PAD + 44.), Point(right, Screen::Bottom() - PAD - 18.)), true);
+				DrawTable(Rectangle::WithCorners(Point(left, Screen::Top() + PAD + 44.),
+					Point(right, Screen::Bottom() - PAD - 18.)), true);
 
 			// The buttons, two to a row, along the bottom of the sidebar; the text above them.
 			const double bw = (SIDE - 3. * 12.) / 2.;
@@ -998,7 +1047,8 @@ namespace {
 				const double y = buttonsTop + (i / 2) * 38.;
 				DrawButton(i, Rectangle::FromCorner(Point(x, y), Point(bw, 30.)));
 			}
-			const Rectangle textBox = Rectangle::WithCorners(Point(side.Left() + 16., Screen::Top() + PAD),
+			const double textTop = DrawCharts(side, Screen::Top() + PAD);
+			const Rectangle textBox = Rectangle::WithCorners(Point(side.Left() + 16., textTop),
 				Point(side.Right() - 16., buttonsTop - 12.));
 			if(textBox.TopLeft() != shownBox.TopLeft() || textBox.Dimensions() != shownBox.Dimensions())
 			{
@@ -1010,6 +1060,67 @@ namespace {
 				shownText = panel.text;
 				body->SetText(shownText);
 			}
+		}
+
+	private:
+		// The panel's charts at the top of the sidebar: their lines over a shared
+		// scale, then a line per series with its label and last value. Answers
+		// where the text below them starts.
+		double DrawCharts(const Rectangle &side, double top)
+		{
+			if(panel.charts.empty())
+				return top;
+			static const Color SERIES[] = {
+				Color(.35f, .75f, .85f, 1.f), Color(.9f, .7f, .3f, 1.f), Color(.65f, .85f, .45f, 1.f)};
+			const Font &font = FontSet::Get(14);
+			const Color &dim = *GameData::Colors().Get("dim");
+			const Color &medium = *GameData::Colors().Get("medium");
+			const Rectangle box = Rectangle::WithCorners(Point(side.Left() + 16., top + 4.),
+				Point(side.Right() - 16., top + 124.));
+			FillShader::Fill(box, *GameData::Colors().Get("faint"));
+			double lo = numeric_limits<double>::max();
+			double hi = numeric_limits<double>::lowest();
+			for(const auto &[label, values] : panel.charts)
+				for(double v : values)
+				{
+					lo = min(lo, v);
+					hi = max(hi, v);
+				}
+			if(lo > hi)
+				return top;
+			if(hi - lo < 1e-9)
+			{
+				hi += 1.;
+				lo -= 1.;
+			}
+			// The scale's top and bottom, and a rule at the middle.
+			for(double f : {0., .5, 1.})
+				FillShader::Fill(Point(box.Center().X(), box.Bottom() - f * box.Height()), Point(box.Width(), 1.), dim);
+			font.Draw(Format::Number(hi), box.TopLeft() + Point(4., 2.), medium);
+			font.Draw(Format::Number(lo), Point(box.Left() + 4., box.Bottom() - font.Height() - 2.), medium);
+			const size_t series = min<size_t>(panel.charts.size(), 3);
+			for(size_t s = 0; s < series; ++s)
+			{
+				const vector<double> &values = panel.charts[s].second;
+				const size_t n = values.size();
+				auto at = [&](size_t i) {
+					const double x = box.Left() + (n > 1 ? box.Width() * i / (n - 1) : box.Width() / 2.);
+					const double y = box.Bottom() - (values[i] - lo) / (hi - lo) * box.Height();
+					return Point(x, y);
+				};
+				for(size_t i = 1; i < n; ++i)
+					LineShader::Draw(at(i - 1), at(i), 1.5f, SERIES[s]);
+			}
+			double y = box.Bottom() + 8.;
+			for(size_t s = 0; s < series; ++s)
+			{
+				const auto &[label, values] = panel.charts[s];
+				const string last = values.empty() ? string() : Format::Number(values.back());
+				font.Draw({label, {static_cast<int>(box.Width() - 90.), Truncate::BACK}}, Point(box.Left(), y), SERIES[s]);
+				font.Draw({last, {static_cast<int>(box.Width()), Alignment::RIGHT}}, Point(box.Left(), y), medium);
+				y += font.Height() + 4.;
+			}
+			return y + 8.;
 		}
 
 	protected:
@@ -1061,10 +1172,38 @@ namespace {
 			string name = mod;
 			int32_t asked = token;
 			RunUIHook(*player, ui, ships.empty() ? nullptr : &ships,
-				[&name, asked, value]() { esmod_number(name.c_str(), asked, value); });
+				[&name, asked, value]() {
+					loaders.ForMod(name, [&](const EsLoader &loader) {
+						if(loader.number)
+							loader.number(name.c_str(), asked, value);
+					});
+				});
 		}
 	};
 	NumberRequest numberRequest;
+
+	// Another pilot, or another save, was made or loaded: nothing the mods put up
+	// for the last one carries over, and its days are not run for this one. The
+	// mods see a fresh world: the next step runs on_enter, but no on_day.
+	void CheckPilot(const PlayerInfo &player)
+	{
+		if(ModState::Generation() == pilotGeneration)
+			return;
+		pilotGeneration = ModState::Generation();
+		overlays.clear();
+		details.clear();
+		planetButtons.clear();
+		outfitterButtons.clear();
+		tagged.clear();
+		kills.clear();
+		stepLosses.clear();
+		lostShips.clear();
+		panel = PanelState();
+		numberRequest = NumberRequest();
+		ForgetWorld();
+		lastDay = player.GetDate().DaysSinceEpoch();
+		lastSystem = nullptr;
+	}
 
 	void OpenPanel(const string &mod, const string &title, const string &text, bool chooser)
 	{
@@ -1074,9 +1213,16 @@ namespace {
 
 
 
-bool ModHarness::IsBuiltIn()
+void ModHarness::Init()
 {
-	return true;
+	FindLoaders();
+}
+
+
+
+int64_t ModHarness::LoaderCount()
+{
+	return loaderCount;
 }
 
 
@@ -1088,10 +1234,21 @@ int64_t ModHarness::LoadedCount()
 
 
 
-void ModHarness::Step(PlayerInfo &player, const list<shared_ptr<Ship>> &ships, list<shared_ptr<Ship>> &newShips,
-	const list<ShipEvent> &events, int step)
+void ModHarness::CollectEvents(const list<ShipEvent> &events)
 {
-	if(state == State::FAILED)
+	if(state != State::RUNNING)
+		return;
+	PruneTags();
+	CountKills(events);
+	CollectLosses(events);
+}
+
+
+
+void ModHarness::Step(PlayerInfo &player, const list<shared_ptr<Ship>> &ships, list<shared_ptr<Ship>> &newShips,
+	int step)
+{
+	if(state == State::IDLE)
 		return;
 
 	Context current;
@@ -1113,26 +1270,40 @@ void ModHarness::Step(PlayerInfo &player, const list<shared_ptr<Ship>> &ships, l
 		Start(player);
 	if(state == State::RUNNING)
 	{
+		CheckPilot(player);
 		inStep = true;
-		PruneTags();
-		CountKills(events);
 		int today = player.GetDate().DaysSinceEpoch();
 		// A new day may have brought events.
 		if(today != lastDay)
 			ForgetWorld();
 		if(SyncDay(today))
 			for(int day = lastDay + 1; day <= today; ++day)
-				esmod_day(day);
+				loaders.Each([day](const EsLoader &loader) {
+					if(loader.day)
+						loader.day(day);
+				});
+		else
+		{
+			// Another pilot or save: what was destroyed before is not this one's.
+			stepLosses.clear();
+		}
 		lastDay = today;
 		const System *system = player.GetSystem();
 		if(system && system != lastSystem)
 		{
 			lastSystem = system;
-			esmod_enter(system->TrueName().c_str());
+			EnterHook(system);
 		}
-		esmod_step(step);
+		loaders.Each([step](const EsLoader &loader) {
+			if(loader.step)
+				loader.step(step);
+		});
 		inStep = false;
 		EndStepTiming();
+		// The losses kept since the last step's hooks were for these hooks only.
+		stepLosses.clear();
+		// A mod may have stopped (a loader may unload a mod that keeps failing).
+		loadedCount = loaders.ModCount();
 	}
 	context = nullptr;
 }
@@ -1141,12 +1312,14 @@ void ModHarness::Step(PlayerInfo &player, const list<shared_ptr<Ship>> &ships, l
 
 void ModHarness::Shutdown()
 {
-	if(state == State::RUNNING)
-		esmod_shutdown();
+	// Each loader ends its mods, and is closed.
+	loaders.Unload();
+	loadersFound = false;
+	loaderCount = 0;
 	// How long each mod's hooks took over the whole run.
 	if(!timings.empty())
 	{
-		string summary = "Dado mod hook times (calls, total, average, slowest):";
+		string summary = "Mod hook times (calls, total, average, slowest):";
 		char line[256];
 		for(const auto &[key, t] : timings)
 		{
@@ -1160,7 +1333,7 @@ void ModHarness::Shutdown()
 	}
 	if(frameSteps)
 	{
-		string summary = "Dado mods, share of each frame over " + to_string(frameSteps) + " engine steps (average, worst step):";
+		string summary = "Mods, share of each frame over " + to_string(frameSteps) + " engine steps (average, worst step):";
 		for(const auto &[mod, share] : frameShares)
 			summary += "\n\t" + mod + ": " + FramePercent(share.totalMs / frameSteps) + ", " + FramePercent(share.worstMs);
 		Logger::Log(summary, Logger::Level::INFO);
@@ -1174,7 +1347,7 @@ void ModHarness::Shutdown()
 		// The calls that took the most time in all, slowest first.
 		vector<pair<pair<string, const char *>, CallStat>> calls(callStats.begin(), callStats.end());
 		sort(calls.begin(), calls.end(), [](const auto &a, const auto &b) { return a.second.ms > b.second.ms; });
-		string summary = "Dado mod calls into the game, by time (mod, call: calls, total, average):";
+		string summary = "Mod calls into the game, by time (mod, call: calls, total, average):";
 		char line[256];
 		for(size_t i = 0; i < calls.size() && i < 25; ++i)
 		{
@@ -1191,6 +1364,8 @@ void ModHarness::Shutdown()
 	loadedCount = 0;
 	tagged.clear();
 	kills.clear();
+	stepLosses.clear();
+	lostShips.clear();
 	overlays.clear();
 	details.clear();
 	planetButtons.clear();
@@ -1202,7 +1377,7 @@ void ModHarness::Shutdown()
 
 void ModHarness::Landed(PlayerInfo &player)
 {
-	if(state == State::FAILED)
+	if(state == State::IDLE)
 		return;
 	Context current;
 	current.player = &player;
@@ -1212,12 +1387,14 @@ void ModHarness::Landed(PlayerInfo &player)
 	ForgetWorld();
 	if(state == State::UNSTARTED)
 		Start(player);
+	if(state == State::RUNNING)
+		CheckPilot(player);
 	const System *system = player.GetSystem();
 	if(state == State::RUNNING && system)
 	{
 		// A pilot loaded on a planet starts its own clock.
 		SyncDay(player.GetDate().DaysSinceEpoch());
-		esmod_enter(system->TrueName().c_str());
+		EnterHook(system);
 	}
 	context = nullptr;
 	// Taking off replaces the ships; the first step in flight runs on_enter again.
@@ -1238,8 +1415,13 @@ void ModHarness::ShipsReplaced()
 void ModHarness::DrawMap(const PlayerInfo &player, const Point &center, double zoom)
 {
 	const Font &font = FontSet::Get(14);
-	// Labels on one system stack downward.
+	// Labels on one system stack downward, below the largest ring drawn there.
 	map<const System *, int> stacked;
+	map<const System *, double> ringRadius;
+	for(const auto &it : overlays)
+		for(const Overlay &item : it.second)
+			if(item.from && !item.to && item.ring)
+				ringRadius[item.from] = max(ringRadius[item.from], 10. * item.scale);
 	for(const auto &it : overlays)
 		for(const Overlay &item : it.second)
 		{
@@ -1261,11 +1443,17 @@ void ModHarness::DrawMap(const PlayerInfo &player, const Point &center, double z
 			}
 			else
 			{
-				RingShader::Draw(from, 10.f, 8.f, item.color);
+				if(item.ring)
+				{
+					const float outer = static_cast<float>(10. * item.scale);
+					RingShader::Draw(from, outer, outer - 2.f, item.color);
+				}
 				if(!item.label.empty())
 				{
 					int row = stacked[item.from]++;
-					Point at = from + Point(-.5 * font.Width(item.label), 12. + row * (font.Height() + 2.));
+					auto radius = ringRadius.find(item.from);
+					double top = max(12., (radius == ringRadius.end() ? 0. : radius->second) + 2.);
+					Point at = from + Point(-.5 * font.Width(item.label), top + row * (font.Height() + 2.));
 					font.Draw(item.label, at, item.color);
 				}
 			}
@@ -1357,6 +1545,10 @@ string ModHarness::PlanetButtonLabel()
 
 shared_ptr<Panel> ModHarness::NewPlanetPanel(PlayerInfo &player)
 {
+	// Without a mod loader there is nothing to show, and the planet screen is the game's own.
+	FindLoaders();
+	if(loaders.Empty())
+		return nullptr;
 	auto view = make_shared<ModPanel>(player);
 	currentView = view.get();
 	return view;
@@ -1400,7 +1592,12 @@ bool ModHarness::OutfitterButtonActive(size_t i, PlayerInfo &player, const vecto
 	string mod = it->first;
 	string name = outfit ? outfit->TrueName() : string();
 	bool active = false;
-	RunUIHook(player, nullptr, &ships, [&]() { active = esmod_can_outfitter(mod.c_str(), name.c_str()); });
+	RunUIHook(player, nullptr, &ships, [&]() {
+		loaders.ForMod(mod, [&](const EsLoader &loader) {
+			if(loader.can_outfitter && loader.can_outfitter(mod.c_str(), name.c_str()))
+				active = true;
+		});
+	});
 	return active;
 }
 
@@ -1415,7 +1612,12 @@ void ModHarness::OutfitterButton(size_t i, PlayerInfo &player, UI &ui, const vec
 	advance(it, i);
 	string mod = it->first;
 	string name = outfit ? outfit->TrueName() : string();
-	RunUIHook(player, &ui, &ships, [&]() { esmod_outfitter(mod.c_str(), name.c_str()); });
+	RunUIHook(player, &ui, &ships, [&]() {
+		loaders.ForMod(mod, [&](const EsLoader &loader) {
+			if(loader.outfitter)
+				loader.outfitter(mod.c_str(), name.c_str());
+		});
+	});
 }
 
 
@@ -1427,7 +1629,7 @@ void ModHarness::PlanetButton(PlayerInfo &player, UI &ui)
 	if(planetButtons.size() == 1)
 	{
 		string mod = planetButtons.begin()->first;
-		RunUIHook(player, ui, [&mod]() { esmod_planet_button(mod.c_str()); });
+		RunUIHook(player, ui, [&mod]() { PlanetButtonHook(mod); });
 		return;
 	}
 	// Several mods: a panel to choose among them.
@@ -1490,10 +1692,13 @@ namespace {
 
 
 
-// The C surface the harness calls: modding/include/es_host.h.
-extern "C" {
+// The functions behind the host table the mod loaders call (modding/es_api.h,
+// EsHost). The calls a mod makes for itself act for the mod whose hook is
+// running, which the game tracks through hook_timing; a mod name is never
+// taken from the loader on trust.
+namespace {
 
-void es_log(const char *text)
+void ES_CALL es_log(const char *text)
 {
 	ES_CALL_TIMER;
 	Logger::Log(text, Logger::Level::INFO);
@@ -1501,7 +1706,7 @@ void es_log(const char *text)
 
 
 
-void es_message(const char *text)
+void ES_CALL es_message(const char *text)
 {
 	ES_CALL_TIMER;
 	if(context)
@@ -1510,7 +1715,7 @@ void es_message(const char *text)
 
 
 
-int32_t es_step()
+int32_t ES_CALL es_step()
 {
 	ES_CALL_TIMER;
 	return context ? context->step : 0;
@@ -1518,7 +1723,7 @@ int32_t es_step()
 
 
 
-const char *es_system_name()
+const char *ES_CALL es_system_name()
 {
 	ES_CALL_TIMER;
 	return context && context->player->GetSystem() ? context->player->GetSystem()->DisplayName().c_str() : "";
@@ -1526,7 +1731,7 @@ const char *es_system_name()
 
 
 
-int32_t es_ship_count()
+int32_t ES_CALL es_ship_count()
 {
 	ES_CALL_TIMER;
 	return context ? static_cast<int32_t>(context->ships.size()) : 0;
@@ -1534,7 +1739,7 @@ int32_t es_ship_count()
 
 
 
-int32_t es_flagship()
+int32_t ES_CALL es_flagship()
 {
 	ES_CALL_TIMER;
 	return context ? context->flagship : -1;
@@ -1542,7 +1747,7 @@ int32_t es_flagship()
 
 
 
-const char *es_ship_name(int32_t i)
+const char *ES_CALL es_ship_name(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1551,7 +1756,7 @@ const char *es_ship_name(int32_t i)
 
 
 
-const char *es_ship_model(int32_t i)
+const char *ES_CALL es_ship_model(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1560,7 +1765,7 @@ const char *es_ship_model(int32_t i)
 
 
 
-int32_t es_ship_is_player(int32_t i)
+int32_t ES_CALL es_ship_is_player(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1569,7 +1774,7 @@ int32_t es_ship_is_player(int32_t i)
 
 
 
-int32_t es_ship_is_disabled(int32_t i)
+int32_t ES_CALL es_ship_is_disabled(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1578,7 +1783,7 @@ int32_t es_ship_is_disabled(int32_t i)
 
 
 
-double es_ship_hull(int32_t i)
+double ES_CALL es_ship_hull(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1587,7 +1792,7 @@ double es_ship_hull(int32_t i)
 
 
 
-double es_ship_max_hull(int32_t i)
+double ES_CALL es_ship_max_hull(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1596,7 +1801,7 @@ double es_ship_max_hull(int32_t i)
 
 
 
-double es_ship_shields(int32_t i)
+double ES_CALL es_ship_shields(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1605,7 +1810,7 @@ double es_ship_shields(int32_t i)
 
 
 
-double es_ship_max_shields(int32_t i)
+double ES_CALL es_ship_max_shields(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1614,7 +1819,7 @@ double es_ship_max_shields(int32_t i)
 
 
 
-double es_ship_energy(int32_t i)
+double ES_CALL es_ship_energy(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1623,7 +1828,7 @@ double es_ship_energy(int32_t i)
 
 
 
-double es_ship_fuel(int32_t i)
+double ES_CALL es_ship_fuel(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1632,7 +1837,7 @@ double es_ship_fuel(int32_t i)
 
 
 
-void es_ship_set_hull(int32_t i, double value)
+void ES_CALL es_ship_set_hull(int32_t i, double value)
 {
 	ES_CALL_TIMER;
 	if(Ship *ship = GetShip(i))
@@ -1646,7 +1851,7 @@ void es_ship_set_hull(int32_t i, double value)
 
 
 
-void es_ship_set_shields(int32_t i, double value)
+void ES_CALL es_ship_set_shields(int32_t i, double value)
 {
 	ES_CALL_TIMER;
 	if(Ship *ship = GetShip(i))
@@ -1655,7 +1860,7 @@ void es_ship_set_shields(int32_t i, double value)
 
 
 
-int64_t es_condition_get(const char *name)
+int64_t ES_CALL es_condition_get(const char *name)
 {
 	ES_CALL_TIMER;
 	return context ? context->player->Conditions().Get(name) : 0;
@@ -1663,7 +1868,7 @@ int64_t es_condition_get(const char *name)
 
 
 
-void es_condition_set(const char *name, int64_t value)
+void ES_CALL es_condition_set(const char *name, int64_t value)
 {
 	ES_CALL_TIMER;
 	if(context)
@@ -1674,7 +1879,7 @@ void es_condition_set(const char *name, int64_t value)
 
 // ---- Mod API 2 ----
 
-int32_t es_day()
+int32_t ES_CALL es_day()
 {
 	ES_CALL_TIMER;
 	return context ? context->player->GetDate().DaysSinceEpoch() : 0;
@@ -1682,7 +1887,7 @@ int32_t es_day()
 
 
 
-const char *es_here()
+const char *ES_CALL es_here()
 {
 	ES_CALL_TIMER;
 	return context && context->player->GetSystem() ? context->player->GetSystem()->TrueName().c_str() : "";
@@ -1690,7 +1895,7 @@ const char *es_here()
 
 
 
-int32_t es_system_count()
+int32_t ES_CALL es_system_count()
 {
 	ES_CALL_TIMER;
 	return static_cast<int32_t>(GalaxySystems().size());
@@ -1698,7 +1903,7 @@ int32_t es_system_count()
 
 
 
-const char *es_system_at(int32_t i)
+const char *ES_CALL es_system_at(int32_t i)
 {
 	ES_CALL_TIMER;
 	const auto &systems = GalaxySystems();
@@ -1707,7 +1912,7 @@ const char *es_system_at(int32_t i)
 
 
 
-const char *es_system_government(const char *name)
+const char *ES_CALL es_system_government(const char *name)
 {
 	ES_CALL_TIMER;
 	const System *system = FindSystem(name);
@@ -1716,7 +1921,7 @@ const char *es_system_government(const char *name)
 
 
 
-int32_t es_system_link_count(const char *name)
+int32_t ES_CALL es_system_link_count(const char *name)
 {
 	ES_CALL_TIMER;
 	const System *system = FindSystem(name);
@@ -1725,7 +1930,7 @@ int32_t es_system_link_count(const char *name)
 
 
 
-const char *es_system_link(const char *name, int32_t k)
+const char *ES_CALL es_system_link(const char *name, int32_t k)
 {
 	ES_CALL_TIMER;
 	const System *system = FindSystem(name);
@@ -1738,7 +1943,7 @@ const char *es_system_link(const char *name, int32_t k)
 
 
 
-int32_t es_system_inhabited(const char *name)
+int32_t ES_CALL es_system_inhabited(const char *name)
 {
 	ES_CALL_TIMER;
 	const System *system = FindSystem(name);
@@ -1747,7 +1952,7 @@ int32_t es_system_inhabited(const char *name)
 
 
 
-int32_t es_system_defense_count(const char *name)
+int32_t ES_CALL es_system_defense_count(const char *name)
 {
 	ES_CALL_TIMER;
 	return static_cast<int32_t>(DefenseFleets(FindSystem(name)).size());
@@ -1755,7 +1960,7 @@ int32_t es_system_defense_count(const char *name)
 
 
 
-const char *es_system_defense_fleet(const char *name, int32_t k)
+const char *ES_CALL es_system_defense_fleet(const char *name, int32_t k)
 {
 	ES_CALL_TIMER;
 	const vector<const Fleet *> &fleets = DefenseFleets(FindSystem(name));
@@ -1764,7 +1969,7 @@ const char *es_system_defense_fleet(const char *name, int32_t k)
 
 
 
-int32_t es_change(const char *text)
+int32_t ES_CALL es_change(const char *text)
 {
 	ES_CALL_TIMER;
 	if(!context || !text)
@@ -1796,7 +2001,7 @@ int32_t es_change(const char *text)
 
 
 
-double es_attitude(const char *government, const char *toward)
+double ES_CALL es_attitude(const char *government, const char *toward)
 {
 	ES_CALL_TIMER;
 	const Government *a = FindGovernment(government);
@@ -1806,7 +2011,7 @@ double es_attitude(const char *government, const char *toward)
 
 
 
-double es_reputation(const char *government)
+double ES_CALL es_reputation(const char *government)
 {
 	ES_CALL_TIMER;
 	const Government *gov = FindGovernment(government);
@@ -1815,7 +2020,7 @@ double es_reputation(const char *government)
 
 
 
-void es_set_reputation(const char *government, double value)
+void ES_CALL es_set_reputation(const char *government, double value)
 {
 	ES_CALL_TIMER;
 	if(const Government *gov = FindGovernment(government))
@@ -1824,7 +2029,7 @@ void es_set_reputation(const char *government, double value)
 
 
 
-int32_t es_plugin_enabled(const char *name)
+int32_t ES_CALL es_plugin_enabled(const char *name)
 {
 	ES_CALL_TIMER;
 	const Plugin *plugin = name ? PluginManager::Get().Find(name) : nullptr;
@@ -1833,7 +2038,7 @@ int32_t es_plugin_enabled(const char *name)
 
 
 
-double es_fleet_strength(const char *name)
+double ES_CALL es_fleet_strength(const char *name)
 {
 	ES_CALL_TIMER;
 	const Fleet *fleet = name ? GameData::Fleets().Find(name) : nullptr;
@@ -1842,7 +2047,7 @@ double es_fleet_strength(const char *name)
 
 
 
-double es_fleet_stat(const char *name, const char *stat)
+double ES_CALL es_fleet_stat(const char *name, const char *stat)
 {
 	ES_CALL_TIMER;
 	const Fleet *fleet = name ? GameData::Fleets().Find(name) : nullptr;
@@ -1859,7 +2064,7 @@ double es_fleet_stat(const char *name, const char *stat)
 
 
 
-int32_t es_system_fleet_count(const char *name)
+int32_t ES_CALL es_system_fleet_count(const char *name)
 {
 	ES_CALL_TIMER;
 	const System *system = FindSystem(name);
@@ -1868,7 +2073,7 @@ int32_t es_system_fleet_count(const char *name)
 
 
 
-const char *es_system_fleet(const char *name, int32_t k)
+const char *ES_CALL es_system_fleet(const char *name, int32_t k)
 {
 	ES_CALL_TIMER;
 	const System *system = FindSystem(name);
@@ -1879,7 +2084,7 @@ const char *es_system_fleet(const char *name, int32_t k)
 
 
 
-int32_t es_spawn(const char *name, const char *government, const char *tag, int32_t arrive)
+int32_t ES_CALL es_spawn(const char *name, const char *government, const char *tag, int32_t arrive)
 {
 	ES_CALL_TIMER;
 	if(!context || !context->newShips || !context->player->GetSystem())
@@ -1920,7 +2125,7 @@ int32_t es_spawn(const char *name, const char *government, const char *tag, int3
 
 
 
-const char *es_ship_tag(int32_t i)
+const char *ES_CALL es_ship_tag(int32_t i)
 {
 	ES_CALL_TIMER;
 	const string *tag = TagOf(GetShip(i));
@@ -1929,7 +2134,7 @@ const char *es_ship_tag(int32_t i)
 
 
 
-const char *es_ship_government(int32_t i)
+const char *ES_CALL es_ship_government(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1938,7 +2143,7 @@ const char *es_ship_government(int32_t i)
 
 
 
-double es_ship_strength(int32_t i)
+double ES_CALL es_ship_strength(int32_t i)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
@@ -1947,7 +2152,7 @@ double es_ship_strength(int32_t i)
 
 
 
-double es_tag_strength(const char *tag)
+double ES_CALL es_tag_strength(const char *tag)
 {
 	ES_CALL_TIMER;
 	if(!context || !tag)
@@ -1972,7 +2177,7 @@ double es_tag_strength(const char *tag)
 
 
 
-int32_t es_player_kills(const char *prefix)
+int32_t ES_CALL es_player_kills(const char *prefix)
 {
 	ES_CALL_TIMER;
 	string start = prefix ? prefix : "";
@@ -1990,18 +2195,24 @@ int32_t es_player_kills(const char *prefix)
 
 
 
-void es_map_clear(const char *mod)
+void ES_CALL es_map_clear()
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	overlays.erase(mod ? mod : "");
 	details.erase(mod ? mod : "");
 }
 
 
 
-void es_map_line(const char *mod, const char *from, const char *to, double r, double g, double b)
+void ES_CALL es_map_line(const char *from, const char *to, double r, double g, double b)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	const System *a = FindSystem(from);
 	const System *z = FindSystem(to);
 	if(a && z)
@@ -2010,27 +2221,36 @@ void es_map_line(const char *mod, const char *from, const char *to, double r, do
 
 
 
-void es_map_marker(const char *mod, const char *system, double r, double g, double b, const char *label)
+void ES_CALL es_map_marker(const char *system, double r, double g, double b, const char *label)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(const System *at = FindSystem(system))
 		overlays[mod ? mod : ""].push_back(Overlay{at, nullptr, Color(r, g, b, 1.f), label ? label : ""});
 }
 
 
 
-void es_map_detail(const char *mod, const char *system, const char *title, const char *text, double r, double g, double b)
+void ES_CALL es_map_detail(const char *system, const char *title, const char *text, double r, double g, double b)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(const System *at = FindSystem(system))
 		details[mod ? mod : ""].push_back(Detail{at, title ? title : "", text ? text : "", Color(r, g, b, 1.f)});
 }
 
 
 
-void es_planet_button(const char *mod, const char *label)
+void ES_CALL es_planet_button(const char *label)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	string name = mod ? mod : "";
 	if(label && *label)
 		planetButtons[name] = label;
@@ -2040,9 +2260,12 @@ void es_planet_button(const char *mod, const char *label)
 
 
 
-void es_panel_open(const char *mod, const char *title, const char *text)
+void ES_CALL es_panel_open(const char *title, const char *text)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	string name = mod ? mod : "";
 	// A mod opens a panel from a hook the player started or on landing, or refreshes its own open one.
 	if(!(context && (context->ui || context->landing)) && !(panel.open && panel.mod == name))
@@ -2052,39 +2275,52 @@ void es_panel_open(const char *mod, const char *title, const char *text)
 
 
 
-void es_panel_button(const char *mod, const char *label)
+void ES_CALL es_panel_button(const char *label)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(panel.open && panel.mod == (mod ? mod : "") && label)
 		panel.buttons.push_back(label);
 }
 
 
 
-void es_panel_close(const char *mod)
+void ES_CALL es_panel_close()
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(panel.open && panel.mod == (mod ? mod : ""))
 		panel.open = false;
 }
 
 
 
-// The harness times each hook it runs for a mod (not part of the mod API).
-void es_hook_timing(const char *mod, const char *hook, int32_t begin)
+// A loader brackets each hook it runs for a mod: `begin` 1 before, 0 after. The
+// game times the hook, and until the end (or the end of the game's call into
+// the loader) knows which mod is running: a mod name another loader already
+// runs is refused, so its calls do nothing. Only the begin's name counts; the
+// end's is not looked at, and an end without a begin is ignored.
+void ES_CALL es_hook_timing(const char *mod, const char *hook, int32_t begin)
 {
 	auto now = chrono::steady_clock::now();
 	if(begin)
 	{
-		currentMod = mod ? mod : "";
+		loaders.BeginHook(mod ? mod : "");
 		hookStart = now;
 		return;
 	}
+	if(!loaders.HookOpen())
+		return;
+	const string timedMod = loaders.TimedName();
+	loaders.EndHook();
 	double ms = chrono::duration<double, milli>(now - hookStart).count();
 	if(inStep)
-		stepMs[currentMod] += ms;
-	currentMod.clear();
-	HookTiming &t = timings[make_pair(string(mod ? mod : ""), string(hook ? hook : ""))];
+		stepMs[timedMod] += ms;
+	HookTiming &t = timings[make_pair(timedMod, string(hook ? hook : ""))];
 	++t.calls;
 	t.totalMs += ms;
 	t.maxMs = max(t.maxMs, ms);
@@ -2092,8 +2328,8 @@ void es_hook_timing(const char *mod, const char *hook, int32_t begin)
 	{
 		t.reportedMs = ms;
 		char text[256];
-		snprintf(text, sizeof(text), "Dado mod \"%s\": %s took %.1f ms (slow is %.0f ms or more).",
-			mod ? mod : "", hook ? hook : "", ms, SLOW_HOOK_MS);
+		snprintf(text, sizeof(text), "Mod \"%s\": %s took %.1f ms (slow is %.0f ms or more).",
+			timedMod.c_str(), hook ? hook : "", ms, SLOW_HOOK_MS);
 		Logger::Log(text, Logger::Level::WARNING);
 	}
 }
@@ -2102,9 +2338,12 @@ void es_hook_timing(const char *mod, const char *hook, int32_t begin)
 
 // ---- Mod API 5 ----
 
-void es_outfitter_button(const char *mod, const char *label)
+void ES_CALL es_outfitter_button(const char *label)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	string name = mod ? mod : "";
 	if(label && *label)
 		outfitterButtons[name] = label;
@@ -2114,7 +2353,7 @@ void es_outfitter_button(const char *mod, const char *label)
 
 
 
-int32_t es_outfitter_ship_count()
+int32_t ES_CALL es_outfitter_ship_count()
 {
 	ES_CALL_TIMER;
 	return context && context->outfitterShips ? static_cast<int32_t>(context->outfitterShips->size()) : 0;
@@ -2122,7 +2361,7 @@ int32_t es_outfitter_ship_count()
 
 
 
-const char *es_outfitter_ship(int32_t k)
+const char *ES_CALL es_outfitter_ship(int32_t k)
 {
 	ES_CALL_TIMER;
 	if(!context || !context->outfitterShips || k < 0 || k >= static_cast<int32_t>(context->outfitterShips->size()))
@@ -2132,7 +2371,7 @@ const char *es_outfitter_ship(int32_t k)
 
 
 
-int32_t es_fleet_count()
+int32_t ES_CALL es_fleet_count()
 {
 	ES_CALL_TIMER;
 	return static_cast<int32_t>(PlayerFleet().size());
@@ -2140,7 +2379,7 @@ int32_t es_fleet_count()
 
 
 
-const char *es_fleet_ship(int32_t k)
+const char *ES_CALL es_fleet_ship(int32_t k)
 {
 	ES_CALL_TIMER;
 	const vector<Ship *> &fleet = PlayerFleet();
@@ -2151,7 +2390,7 @@ const char *es_fleet_ship(int32_t k)
 
 
 
-const char *es_fleet_ship_name(const char *uuid)
+const char *ES_CALL es_fleet_ship_name(const char *uuid)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = FindPlayerShip(uuid);
@@ -2160,7 +2399,7 @@ const char *es_fleet_ship_name(const char *uuid)
 
 
 
-const char *es_fleet_ship_model(const char *uuid)
+const char *ES_CALL es_fleet_ship_model(const char *uuid)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = FindPlayerShip(uuid);
@@ -2169,7 +2408,7 @@ const char *es_fleet_ship_model(const char *uuid)
 
 
 
-int32_t es_ship_outfit_count(const char *uuid, const char *outfit)
+int32_t ES_CALL es_ship_outfit_count(const char *uuid, const char *outfit)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = FindPlayerShip(uuid);
@@ -2179,7 +2418,7 @@ int32_t es_ship_outfit_count(const char *uuid, const char *outfit)
 
 
 
-int32_t es_ship_integrated_count(const char *uuid, const char *outfit)
+int32_t ES_CALL es_ship_integrated_count(const char *uuid, const char *outfit)
 {
 	ES_CALL_TIMER;
 	const Ship *ship = FindPlayerShip(uuid);
@@ -2189,7 +2428,7 @@ int32_t es_ship_integrated_count(const char *uuid, const char *outfit)
 
 
 
-int32_t es_ship_integrate(const char *uuid, const char *outfit, double scale)
+int32_t ES_CALL es_ship_integrate(const char *uuid, const char *outfit, double scale)
 {
 	ES_CALL_TIMER;
 	Ship *ship = FindPlayerShip(uuid);
@@ -2199,7 +2438,7 @@ int32_t es_ship_integrate(const char *uuid, const char *outfit, double scale)
 
 
 
-const char *es_outfit_name(const char *outfit)
+const char *ES_CALL es_outfit_name(const char *outfit)
 {
 	ES_CALL_TIMER;
 	const Outfit *it = FindOutfit(outfit);
@@ -2208,7 +2447,7 @@ const char *es_outfit_name(const char *outfit)
 
 
 
-const char *es_outfit_category(const char *outfit)
+const char *ES_CALL es_outfit_category(const char *outfit)
 {
 	ES_CALL_TIMER;
 	const Outfit *it = FindOutfit(outfit);
@@ -2217,7 +2456,7 @@ const char *es_outfit_category(const char *outfit)
 
 
 
-double es_outfit_attribute(const char *outfit, const char *attribute)
+double ES_CALL es_outfit_attribute(const char *outfit, const char *attribute)
 {
 	ES_CALL_TIMER;
 	const Outfit *it = FindOutfit(outfit);
@@ -2233,7 +2472,7 @@ double es_outfit_attribute(const char *outfit, const char *attribute)
 
 
 
-int32_t es_outfit_is_weapon(const char *outfit)
+int32_t ES_CALL es_outfit_is_weapon(const char *outfit)
 {
 	ES_CALL_TIMER;
 	const Outfit *it = FindOutfit(outfit);
@@ -2265,28 +2504,34 @@ namespace {
 
 
 
-const char *es_data(const char *mod, const char *key)
+const char *ES_CALL es_data(const char *key)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return "";
 	if(!context || !mod || !key)
 		return "";
-	return context->player->ModData(mod, key).c_str();
+	return ModState::Data(mod, key).c_str();
 }
 
 
 
-void es_set_data(const char *mod, const char *key, const char *text)
+void ES_CALL es_set_data(const char *key, const char *text)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	// A mod's text is saved with the pilot; 4 MB a key is plenty.
 	if(!context || !mod || !key || !*key || !text || strlen(text) > (4u << 20))
 		return;
-	context->player->SetModData(mod, key, text);
+	ModState::SetData(mod, key, text);
 }
 
 
 
-const char *es_planet()
+const char *ES_CALL es_planet()
 {
 	ES_CALL_TIMER;
 	const Planet *planet = context ? context->player->GetPlanet() : nullptr;
@@ -2295,7 +2540,7 @@ const char *es_planet()
 
 
 
-const char *es_planet_name(const char *name)
+const char *ES_CALL es_planet_name(const char *name)
 {
 	ES_CALL_TIMER;
 	const Planet *planet = FindPlanet(name);
@@ -2304,7 +2549,7 @@ const char *es_planet_name(const char *name)
 
 
 
-const char *es_planet_system(const char *name)
+const char *ES_CALL es_planet_system(const char *name)
 {
 	ES_CALL_TIMER;
 	const Planet *planet = FindPlanet(name);
@@ -2313,7 +2558,7 @@ const char *es_planet_system(const char *name)
 
 
 
-const char *es_planet_government(const char *name)
+const char *ES_CALL es_planet_government(const char *name)
 {
 	ES_CALL_TIMER;
 	const Planet *planet = FindPlanet(name);
@@ -2322,7 +2567,7 @@ const char *es_planet_government(const char *name)
 
 
 
-int32_t es_planet_count(const char *system)
+int32_t ES_CALL es_planet_count(const char *system)
 {
 	ES_CALL_TIMER;
 	return static_cast<int32_t>(PlanetsOf(FindSystem(system)).size());
@@ -2330,7 +2575,7 @@ int32_t es_planet_count(const char *system)
 
 
 
-const char *es_planet_at(const char *system, int32_t k)
+const char *ES_CALL es_planet_at(const char *system, int32_t k)
 {
 	ES_CALL_TIMER;
 	vector<const Planet *> planets = PlanetsOf(FindSystem(system));
@@ -2339,7 +2584,7 @@ const char *es_planet_at(const char *system, int32_t k)
 
 
 
-int32_t es_planet_service(const char *name, const char *service)
+int32_t ES_CALL es_planet_service(const char *name, const char *service)
 {
 	ES_CALL_TIMER;
 	const Planet *planet = FindPlanet(name);
@@ -2364,9 +2609,12 @@ int32_t es_planet_service(const char *name, const char *service)
 
 
 
-void es_panel_columns(const char *mod, const char *headers)
+void ES_CALL es_panel_columns(const char *headers)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(panel.open && panel.mod == (mod ? mod : ""))
 	{
 		panel.columns = SplitCells(headers);
@@ -2376,18 +2624,24 @@ void es_panel_columns(const char *mod, const char *headers)
 
 
 
-void es_panel_row(const char *mod, const char *cells)
+void ES_CALL es_panel_row(const char *cells)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(panel.open && panel.mod == (mod ? mod : "") && !panel.columns.empty())
 		panel.rows.push_back(SplitCells(cells));
 }
 
 
 
-void es_ask_number(const char *mod, const char *text, int32_t token, int32_t most)
+void ES_CALL es_ask_number(const char *text, int32_t token, int32_t most)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	// Only a hook the player started may ask them something.
 	if(!context || !context->ui || most < 1)
 		return;
@@ -2404,9 +2658,12 @@ void es_ask_number(const char *mod, const char *text, int32_t token, int32_t mos
 
 // ---- Mod API 7 ----
 
-void es_screen_open(const char *mod, const char *title, const char *text)
+void ES_CALL es_screen_open(const char *title, const char *text)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	string name = mod ? mod : "";
 	// A screen opens only from a hook the player started, or replaces the mod's own open one.
 	if(!(context && context->ui) && !(panel.open && panel.mod == name && panel.full))
@@ -2419,18 +2676,369 @@ void es_screen_open(const char *mod, const char *title, const char *text)
 
 
 
-void es_panel_select(const char *mod, int32_t row)
+void ES_CALL es_panel_select(int32_t row)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	if(panel.open && panel.mod == (mod ? mod : ""))
 		panel.selected = row;
 }
 
 
 
-void es_confirm(const char *mod, const char *text, int32_t token)
+// ---- Mod API 8 ----
+
+void ES_CALL es_panel_chart(const char *label, const char *values)
 {
 	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
+	if(!panel.open || panel.mod != (mod ? mod : "") || panel.charts.size() >= 3)
+		return;
+	vector<double> parsed;
+	string number;
+	for(const char *c = values ? values : ""; ; ++c)
+	{
+		if(*c == ',' || !*c)
+		{
+			if(!number.empty())
+			{
+				char *end = nullptr;
+				double v = strtod(number.c_str(), &end);
+				if(end != number.c_str() && isfinite(v))
+					parsed.push_back(v);
+			}
+			number.clear();
+			if(!*c)
+				break;
+		}
+		else
+			number += *c;
+	}
+	if(parsed.size() > 2000)
+		parsed.erase(parsed.begin(), parsed.end() - 2000);
+	panel.charts.emplace_back(label ? label : "", std::move(parsed));
+}
+
+
+
+int32_t ES_CALL es_offer_job(const char *name, const char *body)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return 0;
+	if(!context || !mod || !name || !*name || !body)
+		return 0;
+	PlayerInfo &player = *context->player;
+	const Planet *planet = player.GetPlanet();
+	if(!planet || !planet->GetPort().HasService(Port::ServicesType::JobBoard))
+		return 0;
+	// The mod's text is the body of a mission, indented under one named after the
+	// mod, and made a job.
+	string title = string(mod) + ": " + name;
+	replace(title.begin(), title.end(), '"', '\'');
+	string text = "mission \"" + title + "\"\n\tjob\n";
+	istringstream lines(body);
+	for(string line; getline(lines, line); )
+		text += "\t" + line + "\n";
+	istringstream in(text);
+	DataFile file(in);
+	for(const DataNode &node : file)
+		if(node.Token(0) == "mission")
+		{
+			Mission source(node, &player.Conditions(), &player.VisitedSystems(), &player.VisitedPlanets());
+			Mission job = source.Instantiate(player);
+			if(job.IsFailed())
+				return 0;
+			job.RecalculateTrackedSystems();
+			return player.AddJob(std::move(job));
+		}
+	return 0;
+}
+
+
+
+// ---- Mod API 9 ----
+
+namespace {
+	// A ship model by its true name: a key of the game's ships, defined.
+	const Ship *FindModel(const char *name)
+	{
+		const Ship *model = name && *name ? GameData::Ships().Find(name) : nullptr;
+		return model && model->IsValid() ? model : nullptr;
+	}
+
+	// The models a planet's shipyards sell, permanent and conditional, as the
+	// planet screen gathers them; sorted by true name, and found once per run of
+	// hooks (ForgetWorld clears them when events may have changed them).
+	const vector<const Ship *> &ShipyardModels(const Planet *planet)
+	{
+		static const vector<const Ship *> none;
+		if(!planet || !context)
+			return none;
+		auto it = context->cache.shipyards.find(planet);
+		if(it == context->cache.shipyards.end())
+		{
+			Sale<Ship> stock;
+			for(const Shop<Ship> *shop : planet->Shipyards())
+				stock.Add(shop->Stock());
+			vector<const Ship *> models;
+			for(const Ship *model : stock)
+				if(model && model->IsValid())
+					models.push_back(model);
+			sort(models.begin(), models.end(),
+				[](const Ship *a, const Ship *b) { return a->VariantName() < b->VariantName(); });
+			it = context->cache.shipyards.emplace(planet, std::move(models)).first;
+		}
+		return it->second;
+	}
+
+	// The player's fleet changed: list it again when next asked.
+	void ForgetFleet()
+	{
+		if(!context)
+			return;
+		context->cache.fleetBuilt = false;
+		context->cache.fleet.clear();
+		context->cache.fleetByUuid.clear();
+	}
+}
+
+
+
+void ES_CALL es_ship_stock_on(int32_t on)
+{
+	ES_CALL_TIMER;
+	if(context)
+		ModState::SetShipStockEnabled(on != 0);
+}
+
+
+
+int32_t ES_CALL es_ship_stock(const char *planet, const char *model)
+{
+	ES_CALL_TIMER;
+	const Planet *at = FindPlanet(planet);
+	const Ship *ship = FindModel(model);
+	if(!context || !at || !ship)
+		return -1;
+	return ModState::ShipStock(at, ship);
+}
+
+
+
+void ES_CALL es_set_ship_stock(const char *planet, const char *model, int32_t count)
+{
+	ES_CALL_TIMER;
+	const Planet *at = FindPlanet(planet);
+	const Ship *ship = FindModel(model);
+	if(context && at && ship)
+		ModState::SetShipStock(at, ship, count < 0 ? -1 : count);
+}
+
+
+
+void ES_CALL es_ship_order_note(const char *planet, const char *model, const char *text)
+{
+	ES_CALL_TIMER;
+	const Planet *at = FindPlanet(planet);
+	const Ship *ship = FindModel(model);
+	if(context && at && ship)
+		ModState::SetShipOrderNote(at, ship, text ? text : "");
+}
+
+
+
+int32_t ES_CALL es_shipyard_count(const char *planet)
+{
+	ES_CALL_TIMER;
+	return static_cast<int32_t>(ShipyardModels(FindPlanet(planet)).size());
+}
+
+
+
+const char *ES_CALL es_shipyard_model(const char *planet, int32_t k)
+{
+	ES_CALL_TIMER;
+	const vector<const Ship *> &models = ShipyardModels(FindPlanet(planet));
+	return k >= 0 && k < static_cast<int32_t>(models.size()) ? models[k]->VariantName().c_str() : "";
+}
+
+
+
+const char *ES_CALL es_model_name(const char *model)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = FindModel(model);
+	return ship ? ship->DisplayModelName().c_str() : "";
+}
+
+
+
+int64_t ES_CALL es_model_cost(const char *model)
+{
+	ES_CALL_TIMER;
+	// What buy_ship charges: the shipyard's price for a brand-new hull.
+	return ModHarness::NewShipCost(FindModel(model));
+}
+
+
+
+const char *ES_CALL es_model_category(const char *model)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = FindModel(model);
+	return ship ? ship->Attributes().Category().c_str() : "";
+}
+
+
+
+const char *ES_CALL es_model_licenses(const char *model)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = FindModel(model);
+	if(!ship)
+		return "";
+	string list;
+	for(const string &license : ship->Attributes().Licenses())
+		list += (list.empty() ? "" : ",") + license;
+	return Return(std::move(list));
+}
+
+
+
+int32_t ES_CALL es_buy_ship(const char *model, const char *name)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return 0;
+	// Only a hook the player started may spend their credits.
+	if(!context || !context->ui)
+		return 0;
+	PlayerInfo &player = *context->player;
+	const Ship *ship = FindModel(model);
+	if(!ship || !player.GetPlanet())
+		return 0;
+	// The shipyard sells licenses with a hull; a mod's purchase does not, so the
+	// player must hold every license the model needs already.
+	for(const string &license : ship->Attributes().Licenses())
+		if(!player.HasLicense(license))
+			return 0;
+	// A delivered order: the full new price (model_cost), refused when the
+	// player cannot pay. It leaves every shop alone: the shelf stock, the used
+	// hulls and outfits in stock, and their depreciation records. An empty name
+	// gets a random one.
+	if(!player.DeliverShip(ship, name ? name : ""))
+		return 0;
+	// As the shipyard does when the player leaves it.
+	player.UpdateCargoCapacities();
+	ForgetFleet();
+	Logger::Log("Mod \"" + string(mod) + "\" bought a " + ship->VariantName() + " for the player.",
+		Logger::Level::INFO);
+	return 1;
+}
+
+
+
+namespace {
+	// The k-th loss, only in the hooks an engine step runs.
+	const Loss *LossAt(int32_t k)
+	{
+		return context && inStep && k >= 0 && k < static_cast<int32_t>(stepLosses.size()) ? &stepLosses[k] : nullptr;
+	}
+}
+
+
+
+int32_t ES_CALL es_losses()
+{
+	ES_CALL_TIMER;
+	return context && inStep ? static_cast<int32_t>(stepLosses.size()) : 0;
+}
+
+
+
+const char *ES_CALL es_loss_model(int32_t k)
+{
+	ES_CALL_TIMER;
+	const Loss *loss = LossAt(k);
+	return loss ? loss->model.c_str() : "";
+}
+
+
+
+const char *ES_CALL es_loss_government(int32_t k)
+{
+	ES_CALL_TIMER;
+	const Loss *loss = LossAt(k);
+	return loss ? loss->government.c_str() : "";
+}
+
+
+
+int32_t ES_CALL es_loss_by_player(int32_t k)
+{
+	ES_CALL_TIMER;
+	const Loss *loss = LossAt(k);
+	return loss && loss->byPlayer;
+}
+
+
+
+int32_t ES_CALL es_ship_in_stock(const char *model)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = FindModel(model);
+	if(!context || !ship || !context->player->GetPlanet())
+		return 0;
+	// This game keeps no used hulls; one with used-hull support (patches/) keeps
+	// them by base model and answers their count here.
+	return 0;
+}
+
+
+
+void ES_CALL es_map_ring(const char *system, double scale, double r, double g, double b)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
+	const System *at = FindSystem(system);
+	if(!at)
+		return;
+	scale = isfinite(scale) ? clamp(scale, .5, 3.) : 1.;
+	Overlay ring{at, nullptr, Color(r, g, b, 1.f), string()};
+	ring.scale = scale;
+	overlays[mod ? mod : ""].push_back(ring);
+}
+
+
+
+void ES_CALL es_map_label(const char *system, const char *text, double r, double g, double b)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
+	const System *at = FindSystem(system);
+	if(at && text && *text)
+		overlays[mod ? mod : ""].push_back(Overlay{at, nullptr, Color(r, g, b, 1.f), text, false});
+}
+
+
+
+void ES_CALL es_confirm(const char *text, int32_t token)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return;
 	// Only a hook the player started may ask them something.
 	if(!context || !context->ui)
 		return;
@@ -2443,10 +3051,132 @@ void es_confirm(const char *mod, const char *text, int32_t token)
 	// "Cancel" is the default: what a mod asks to confirm may not be undone.
 	ui->Push(DialogPanel::CallFunctionIfOk([name, player, ui, ships, token]() {
 		RunUIHook(*player, ui, ships.empty() ? nullptr : &ships,
-			[&name, token]() { esmod_confirm(name.c_str(), token); });
+			[&name, token]() {
+				loaders.ForMod(name, [&](const EsLoader &loader) {
+					if(loader.confirm)
+						loader.confirm(name.c_str(), token);
+				});
+			});
 	}, text ? text : "", 2));
 }
 
 }
 
-#endif
+
+
+namespace {
+	const EsHost &Host()
+	{
+		static EsHost host;
+		static bool filled = false;
+		if(filled)
+			return host;
+		filled = true;
+		host.size = static_cast<uint32_t>(sizeof(EsHost));
+		host.version = ES_API_VERSION;
+		host.log = es_log;
+		host.message = es_message;
+		host.step = es_step;
+		host.system_name = es_system_name;
+		host.ship_count = es_ship_count;
+		host.flagship = es_flagship;
+		host.ship_name = es_ship_name;
+		host.ship_model = es_ship_model;
+		host.ship_is_player = es_ship_is_player;
+		host.ship_is_disabled = es_ship_is_disabled;
+		host.ship_hull = es_ship_hull;
+		host.ship_max_hull = es_ship_max_hull;
+		host.ship_shields = es_ship_shields;
+		host.ship_max_shields = es_ship_max_shields;
+		host.ship_energy = es_ship_energy;
+		host.ship_fuel = es_ship_fuel;
+		host.ship_set_hull = es_ship_set_hull;
+		host.ship_set_shields = es_ship_set_shields;
+		host.condition_get = es_condition_get;
+		host.condition_set = es_condition_set;
+		host.day = es_day;
+		host.here = es_here;
+		host.system_count = es_system_count;
+		host.system_at = es_system_at;
+		host.system_government = es_system_government;
+		host.system_link_count = es_system_link_count;
+		host.system_link = es_system_link;
+		host.system_inhabited = es_system_inhabited;
+		host.system_defense_count = es_system_defense_count;
+		host.system_defense_fleet = es_system_defense_fleet;
+		host.change = es_change;
+		host.attitude = es_attitude;
+		host.reputation = es_reputation;
+		host.set_reputation = es_set_reputation;
+		host.plugin_enabled = es_plugin_enabled;
+		host.fleet_strength = es_fleet_strength;
+		host.fleet_stat = es_fleet_stat;
+		host.system_fleet_count = es_system_fleet_count;
+		host.system_fleet = es_system_fleet;
+		host.spawn = es_spawn;
+		host.ship_tag = es_ship_tag;
+		host.ship_government = es_ship_government;
+		host.ship_strength = es_ship_strength;
+		host.tag_strength = es_tag_strength;
+		host.player_kills = es_player_kills;
+		host.map_clear = es_map_clear;
+		host.map_line = es_map_line;
+		host.map_marker = es_map_marker;
+		host.map_detail = es_map_detail;
+		host.planet_button = es_planet_button;
+		host.panel_open = es_panel_open;
+		host.panel_button = es_panel_button;
+		host.panel_close = es_panel_close;
+		host.hook_timing = es_hook_timing;
+		host.outfitter_button = es_outfitter_button;
+		host.outfitter_ship_count = es_outfitter_ship_count;
+		host.outfitter_ship = es_outfitter_ship;
+		host.fleet_count = es_fleet_count;
+		host.fleet_ship = es_fleet_ship;
+		host.fleet_ship_name = es_fleet_ship_name;
+		host.fleet_ship_model = es_fleet_ship_model;
+		host.ship_outfit_count = es_ship_outfit_count;
+		host.ship_integrated_count = es_ship_integrated_count;
+		host.ship_integrate = es_ship_integrate;
+		host.outfit_name = es_outfit_name;
+		host.outfit_category = es_outfit_category;
+		host.outfit_attribute = es_outfit_attribute;
+		host.outfit_is_weapon = es_outfit_is_weapon;
+		host.confirm = es_confirm;
+		host.data = es_data;
+		host.set_data = es_set_data;
+		host.planet = es_planet;
+		host.planet_name = es_planet_name;
+		host.planet_system = es_planet_system;
+		host.planet_government = es_planet_government;
+		host.planet_count = es_planet_count;
+		host.planet_at = es_planet_at;
+		host.planet_service = es_planet_service;
+		host.panel_columns = es_panel_columns;
+		host.panel_row = es_panel_row;
+		host.ask_number = es_ask_number;
+		host.screen_open = es_screen_open;
+		host.panel_select = es_panel_select;
+		host.panel_chart = es_panel_chart;
+		host.offer_job = es_offer_job;
+		host.ship_stock_on = es_ship_stock_on;
+		host.ship_stock = es_ship_stock;
+		host.set_ship_stock = es_set_ship_stock;
+		host.ship_order_note = es_ship_order_note;
+		host.shipyard_count = es_shipyard_count;
+		host.shipyard_model = es_shipyard_model;
+		host.model_name = es_model_name;
+		host.model_cost = es_model_cost;
+		host.model_category = es_model_category;
+		host.model_licenses = es_model_licenses;
+		host.buy_ship = es_buy_ship;
+		host.losses = es_losses;
+		host.loss_model = es_loss_model;
+		host.loss_government = es_loss_government;
+		host.loss_by_player = es_loss_by_player;
+		host.map_label = es_map_label;
+		host.map_ring = es_map_ring;
+		host.ship_in_stock = es_ship_in_stock;
+		return host;
+	}
+}

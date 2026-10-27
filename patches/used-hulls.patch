@@ -1,0 +1,312 @@
+diff --git a/source/PlayerInfo.cpp b/source/PlayerInfo.cpp
+--- a/source/PlayerInfo.cpp
++++ b/source/PlayerInfo.cpp
+@@ -464,6 +464,16 @@
+ 				if(grand.Size() >= 2)
+ 					stock[GameData::Outfits().Get(grand.Token(0))] += grand.Value(1);
+ 		}
++		else if(key == "ship in stock")
++		{
++			for(const DataNode &grand : child)
++			{
++				const Ship *model = GameData::Ships().Find(grand.Token(0));
++				if(model && grand.Size() >= 2 && grand.Value(1) > 0.)
++					shipInStock[model] = static_cast<int>(
++						min(grand.Value(1), static_cast<double>(numeric_limits<int>::max())));
++			}
++		}
+ 		else if(key == "fleet depreciation")
+ 			depreciation.Load(child);
+ 		else if(key == "stock depreciation")
+@@ -1936,6 +1946,7 @@
+ 	availableMissions.clear();
+ 	doneMissions.clear();
+ 	stock.clear();
++	shipInStock.clear();
+ 
+ 	// Special persons who appeared last time you left the planet, can appear again.
+ 	GameData::ResetPersons();
+@@ -3680,6 +3691,29 @@
+ 
+ 
+ 
++int PlayerInfo::ShipInStock(const Ship *model) const
++{
++	auto it = shipInStock.find(model);
++	return (it == shipInStock.end() ? 0 : it->second);
++}
++
++
++
++// Unlike AddStock(), this does not touch the depreciation records: SellShip()
++// and BuyShip() already move the hull's record between the fleet and the stock.
++void PlayerInfo::AddShipInStock(const Ship *model, int count)
++{
++	if(!model || !model->IsValid())
++		return;
++	int64_t total = static_cast<int64_t>(ShipInStock(model)) + count;
++	if(total <= 0)
++		shipInStock.erase(model);
++	else
++		shipInStock[model] = static_cast<int>(min<int64_t>(total, numeric_limits<int>::max()));
++}
++
++
++
+ // Get depreciation information.
+ const Depreciation &PlayerInfo::FleetDepreciation() const
+ {
+@@ -3982,6 +4016,7 @@
+ 		Logger::Log("Reset the travel plan due to use of invalid system(s).", Logger::Level::WARNING);
+ 	}
+ 
++	erase_if(shipInStock, [](const pair<const Ship *const, int> &entry) { return !entry.first->IsValid(); });
+ 	ModState::Validate();
+ 
+ 	// For old saves, default to the first start condition (the default "Endless Sky" start).
+@@ -5242,6 +5277,22 @@
+ 				});
+ 		}
+ 		out.EndChild();
++	}
++	if(!shipInStock.empty())
++	{
++		out.Write("ship in stock");
++		out.BeginChild();
++		{
++			using ShipStockElement = pair<const Ship *const, int>;
++			WriteSorted(shipInStock,
++				[](const ShipStockElement *lhs, const ShipStockElement *rhs)
++					{ return lhs->first->VariantName() < rhs->first->VariantName(); },
++				[&out](const ShipStockElement &it)
++				{
++					out.Write(it.first->VariantName(), it.second);
++				});
++		}
++		out.EndChild();
+ 	}
+ 	depreciation.Save(out, date.DaysSinceEpoch());
+ 	stockDepreciation.Save(out, date.DaysSinceEpoch());
+diff --git a/source/PlayerInfo.h b/source/PlayerInfo.h
+--- a/source/PlayerInfo.h
++++ b/source/PlayerInfo.h
+@@ -384,6 +384,10 @@
+ 	const std::map<const Outfit*, int> &GetStock() const;
+ 	int Stock(const Outfit *outfit) const;
+ 	void AddStock(const Outfit *outfit, int count);
++	// The ship counterpart of the outfit stock: hulls (base models) sold to this
++	// planet's shipyard, which can be bought back until you take off.
++	int ShipInStock(const Ship *model) const;
++	void AddShipInStock(const Ship *model, int count);
+ 	// Get depreciation information.
+ 	const Depreciation &FleetDepreciation() const;
+ 	const Depreciation &StockDepreciation() const;
+@@ -585,6 +589,7 @@
+ 	std::set<const Outfit *> selectedWeapons;
+ 
+ 	std::map<const Outfit *, int> stock;
++	std::map<const Ship *, int> shipInStock;
+ 	Depreciation depreciation;
+ 	Depreciation stockDepreciation;
+ 	std::set<std::pair<const System *, const Outfit *>> harvested;
+diff --git a/source/ShipyardPanel.cpp b/source/ShipyardPanel.cpp
+--- a/source/ShipyardPanel.cpp
++++ b/source/ShipyardPanel.cpp
+@@ -44,6 +44,7 @@
+ #include "UI.h"
+ 
+ #include <algorithm>
++#include <limits>
+ #include <utility>
+ 
+ class System;
+@@ -101,7 +102,7 @@
+ bool ShipyardPanel::HasItem(const string &name) const
+ {
+ 	const Ship *ship = GameData::Ships().Get(name);
+-	return shipyard.Has(ship);
++	return shipyard.Has(ship) || player.ShipInStock(ship) > 0;
+ }
+ 
+ 
+@@ -115,8 +116,8 @@
+ 
+ 	DrawShip(*ship, point, ship == selectedShip);
+ 
+-	// Show how many are left if a mod tracks this shipyard's stock, and dim the
+-	// tile when there are none.
++	// Show how many are left if a mod tracks this shipyard's stock, or if there
++	// are used hulls in stock, and dim the tile when there are none.
+ 	const string label = StockLabel(ship, false);
+ 	if(!label.empty())
+ 	{
+@@ -366,6 +367,9 @@
+ 
+ 	if(!Available(selectedShip))
+ 	{
++		// A hull that is not sold here could only be bought while used ones were in stock.
++		if(!shipyard.Has(selectedShip))
++			return false;
+ 		// A mod may say where else this model can be had.
+ 		const string &note = ModState::ShipOrderNote(planet, selectedShip);
+ 		return "This ship is out of stock. "
+@@ -429,9 +433,17 @@
+ 	if(licenseCost)
+ 		message += "Note: you will need to pay " + Format::CreditString(licenseCost)
+ 			+ " for the licenses required to operate this ship, in addition to its cost."
+-			" If that is okay with you, go ahead and enter a name for your brand new ";
++			" If that is okay with you, go ahead and enter a name for your ";
+ 	else
+-		message += "Enter a name for your brand new ";
++		message += "Enter a name for your ";
++	// Used hulls are bought first.
++	int used = min(modifier, Used(selectedShip));
++	if(!used)
++		message += "brand new ";
++	else if(used == modifier)
++		message += "used ";
++	else
++		message += "new and used ";
+ 
+ 	if(modifier == 1)
+ 		message += selectedShip->DisplayModelName() + "! (Or leave it blank to use a randomly chosen name.)";
+@@ -542,8 +554,11 @@
+ 		if(!player.BuyShip(selectedShip, shipName))
+ 			break;
+ 		// Only a purchase here takes a hull off the shelf; other ways of adding
+-		// a ship to the fleet do not.
+-		if(ModState::ShipStockEnabled())
++		// a ship to the fleet do not. Used hulls go first, as used outfits do:
++		// the price above already came from the oldest (cheapest) hull in stock.
++		if(Used(selectedShip) > 0)
++			player.AddShipInStock(BaseModel(*selectedShip), -1);
++		else if(ModState::ShipStockEnabled())
+ 			ModState::AddShipStock(planet, selectedShip, -1);
+ 	}
+ 
+@@ -580,17 +595,22 @@
+ 		// whether or not its outfits are kept. If this shipyard sells the ship's
+ 		// exact variant (known only until the game is reloaded, as variant names
+ 		// are not saved) or its base model, and a mod tracks that model here, the
+-		// hull goes back on that shelf for good. Otherwise it is gone, as always.
++		// hull goes back on that shelf for good. Otherwise it is in stock as its
++		// base model until you take off, like the outfits sold with it. Used
++		// hulls are kept by base model because that is how depreciation prices
++		// a chassis, so any tile of that model or its variants can sell them.
+ 		const Ship *variant = GameData::Ships().Find(ship->VariantName());
+-		const Ship *model = GameData::Ships().Find(ship->TrueModelName());
++		const Ship *model = BaseModel(*ship);
+ 		player.SellShip(ship, storeOutfits);
+-		if(any_of(player.Ships().begin(), player.Ships().end(),
++		if(!model || any_of(player.Ships().begin(), player.Ships().end(),
+ 				[ship](const shared_ptr<Ship> &owned) { return owned.get() == ship; }))
+ 			continue;
+ 		if(variant && variant->IsValid() && shipyard.Has(variant) && Stock(variant) >= 0)
+ 			ModState::AddShipStock(planet, variant, 1);
+-		else if(model && model->IsValid() && shipyard.Has(model) && Stock(model) >= 0)
++		else if(shipyard.Has(model) && Stock(model) >= 0)
+ 			ModState::AddShipStock(planet, model, 1);
++		else
++			player.AddShipInStock(model, 1);
+ 	}
+ 	playerShips.clear();
+ 	playerShip = nullptr;
+@@ -617,19 +637,54 @@
+ 
+ int ShipyardPanel::Available(const Ship *model) const
+ {
+-	return Stock(model);
++	// A model not sold here is listed only for its own used hulls.
++	if(!shipyard.Has(model))
++		return player.ShipInStock(model);
++	int used = Used(model);
++	int shelf = Stock(model);
++	if(shelf < 0)
++		return -1;
++	return static_cast<int>(min<int64_t>(static_cast<int64_t>(shelf) + used, numeric_limits<int>::max()));
+ }
+ 
+ 
+ 
+ string ShipyardPanel::StockLabel(const Ship *model, bool isDetails) const
+ {
+-	int total = Available(model);
+-	if(total < 0)
+-		return "";
+-	if(!total)
+-		return isDetails ? "Out of stock" : "out of stock";
+-	return isDetails ? "In stock: " + to_string(total) : to_string(total) + " in stock";
++	int used = shipyard.Has(model) ? Used(model) : player.ShipInStock(model);
++	int shelf = shipyard.Has(model) ? Stock(model) : -1;
++	if(shelf >= 0)
++	{
++		int total = Available(model);
++		if(!total)
++			return isDetails ? "Out of stock" : "out of stock";
++		string label = isDetails ? "In stock: " + to_string(total) : to_string(total) + " in stock";
++		if(used)
++			label += " (" + to_string(used) + " used)";
++		return label;
++	}
++	if(used)
++		return isDetails ? "In stock: " + to_string(used) + " used" : to_string(used) + " used in stock";
++	return "";
++}
++
++
++
++const Ship *ShipyardPanel::BaseModel(const Ship &ship) const
++{
++	// Variants count as their base model. (The variant name is not saved with
++	// the player's ships, so using it would make selling behave differently
++	// after a reload.)
++	const Ship *model = GameData::Ships().Find(ship.TrueModelName());
++	return (model && model->IsValid()) ? model : nullptr;
++}
++
++
++
++int ShipyardPanel::Used(const Ship *model) const
++{
++	const Ship *base = model ? BaseModel(*model) : nullptr;
++	return base ? player.ShipInStock(base) : 0;
+ }
+ 
+ 
+diff --git a/source/ShipyardPanel.h b/source/ShipyardPanel.h
+--- a/source/ShipyardPanel.h
++++ b/source/ShipyardPanel.h
+@@ -61,11 +61,17 @@
+ 	// The shelf count a mod tracks for this model here, or -1 if untracked
+ 	// (stock tracking off, or this model untracked at this planet).
+ 	int Stock(const Ship *model) const;
+-	// How many of this model can be bought here, or -1 if unlimited.
++	// How many of this model can be bought here, counting used hulls in stock,
++	// or -1 if unlimited.
+ 	int Available(const Ship *model) const;
+ 	// The label for this model's stock on its tile or in the details pane, or
+ 	// an empty string if there is nothing to say.
+ 	std::string StockLabel(const Ship *model, bool isDetails) const;
++	// The base model a sold ship is restored to, or nullptr if there is none.
++	const Ship *BaseModel(const Ship &ship) const;
++	// How many used hulls a purchase of this model would draw on: those in
++	// stock for its base model, which also prices its chassis.
++	int Used(const Ship *model) const;
+ 
+ 
+ private:
+diff --git a/source/ModHarness.cpp b/source/ModHarness.cpp
+--- a/source/ModHarness.cpp
++++ b/source/ModHarness.cpp
+@@ -2996,9 +2996,8 @@
+ 	const Ship *ship = FindModel(model);
+ 	if(!context || !ship || !context->player->GetPlanet())
+ 		return 0;
+-	// This game keeps no used hulls; one with used-hull support (patches/) keeps
+-	// them by base model and answers their count here.
+-	return 0;
++	// Used hulls are kept by their base model.
++	return context->player->ShipInStock(GameData::Ships().Get(ship->TrueModelName()));
+ }
+ 
+ 

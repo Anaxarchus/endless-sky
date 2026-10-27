@@ -362,7 +362,7 @@ void MapPanel::Draw()
 	// Or available missions.
 	if(!isSimplified)
 		DrawMissions();
-	// And whatever the Dado mods have marked on it.
+	// And whatever the mods have marked on it.
 	if(!isSimplified)
 		ModHarness::DrawMap(player, center, Zoom());
 }

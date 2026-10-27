@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   changed:
+    if: github.repository == 'endless-sky/endless-sky'
     uses: ./.github/workflows/compute-changes.yml
 
 

@@ -22,6 +22,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "image/MaskManager.h"
 #include "MenuAnimationPanel.h"
 #include "MenuPanel.h"
+#include "ModHarness.h"
 #include "PilotProfile.h"
 #include "PlayerInfo.h"
 #include "Point.h"
@@ -57,6 +58,8 @@ void GameLoadingPanel::Step()
 		Audio::CheckReferences();
 		// Set the game's initial internal state.
 		GameData::FinishLoading();
+		// The mod loaders, before any pilot or menu needs them.
+		ModHarness::Init();
 
 		PilotProfile::LoadProfiles();
 		player.LoadRecent();

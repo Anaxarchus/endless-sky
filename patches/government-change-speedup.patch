@@ -1,0 +1,36 @@
+diff --git a/source/PlayerInfo.cpp b/source/PlayerInfo.cpp
+--- a/source/PlayerInfo.cpp
++++ b/source/PlayerInfo.cpp
+@@ -765,6 +765,23 @@
+ 
+ 
+ // Apply the given set of changes to the game data.
++namespace {
++	// Whether a change to a system only sets its government. That moves and
++	// links nothing, so the galaxy's neighbors, routes and seen systems need no
++	// recomputing (which takes tens of milliseconds).
++	bool OnlyChangesGovernment(const DataNode &node)
++	{
++		if(!node.HasChildren())
++			return false;
++		for(const DataNode &child : node)
++			if(child.Token(0) != "government")
++				return false;
++		return true;
++	}
++}
++
++
++
+ void PlayerInfo::AddChanges(list<DataNode> &changes, bool instantChanges)
+ {
+ 	bool changedPlanets = false;
+@@ -777,7 +794,7 @@
+ 		if(key == "date")
+ 			continue;
+ 		changedPlanets |= (key == "planet" || key == "wormhole");
+-		changedSystems |= (key == "system" || key == "link" || key == "unlink");
++		changedSystems |= ((key == "system" && !OnlyChangesGovernment(change)) || key == "link" || key == "unlink");
+ 		changedShops |= (key == "outfitter" || key == "shipyard");
+ 		GameData::Change(change, *this);
+ 	}

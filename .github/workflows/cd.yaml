@@ -181,7 +181,7 @@ jobs:
 
   cd_upload_artifacts_to_release:
     name: Upload
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository == 'endless-sky/endless-sky'
     runs-on: ubuntu-latest
     permissions:
       contents: write

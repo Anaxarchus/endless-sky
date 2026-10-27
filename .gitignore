@@ -36,6 +36,8 @@ docs/api/
 
 # User-installed plugins
 /plugins/
+# User-installed mod loaders
+/modloaders/
 
 # OS-specific generated files
 .DS_Store

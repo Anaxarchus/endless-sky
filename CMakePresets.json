@@ -80,15 +80,6 @@
 			}
 		},
 		{
-			"name": "linux-dado",
-			"displayName": "Linux + Dado mods",
-			"description": "Linux build with the Dado mod harness (needs the Dado toolchain; see modding/README.md)",
-			"inherits": "linux",
-			"cacheVariables": {
-				"ES_DADO_MODS": "ON"
-			}
-		},
-		{
 			"name": "linux-gles",
 			"displayName": "Linux OpenGL ES",
 			"description": "Builds with the default host compiler with OpenGL ES on Linux",
@@ -133,15 +124,6 @@
 			}
 		},
 		{
-			"name": "macos-dado",
-			"displayName": "MacOS + Dado mods",
-			"description": "MacOS build with the Dado mod harness (needs the Dado toolchain; see modding/README.md)",
-			"inherits": "macos",
-			"cacheVariables": {
-				"ES_DADO_MODS": "ON"
-			}
-		},
-		{
 			"name": "macos-arm",
 			"displayName": "MacOS ARM",
 			"description": "Builds with the default host compiler on ARM-based MacOS",
@@ -158,15 +140,6 @@
 				"type": "equals",
 				"lhs": "${hostSystemName}",
 				"rhs": "Darwin"
-			}
-		},
-		{
-			"name": "macos-arm-dado",
-			"displayName": "MacOS ARM + Dado mods",
-			"description": "MacOS ARM build with the Dado mod harness (needs the Dado toolchain; see modding/README.md)",
-			"inherits": "macos-arm",
-			"cacheVariables": {
-				"ES_DADO_MODS": "ON"
 			}
 		},
 		{
@@ -420,26 +393,6 @@
 			"inherits": "release"
 		},
 		{
-			"name": "linux-dado-debug",
-			"displayName": "Debug",
-			"configurePreset": "linux-dado",
-			"inherits": "debug",
-			"targets": [
-				"all",
-				"dado_example_plugin"
-			]
-		},
-		{
-			"name": "linux-dado-release",
-			"displayName": "Release",
-			"configurePreset": "linux-dado",
-			"inherits": "release",
-			"targets": [
-				"all",
-				"dado_example_plugin"
-			]
-		},
-		{
 			"name": "linux-gles-debug",
 			"displayName": "Debug",
 			"configurePreset": "linux-gles",
@@ -476,26 +429,6 @@
 			"inherits": "release"
 		},
 		{
-			"name": "macos-dado-debug",
-			"displayName": "Debug",
-			"configurePreset": "macos-dado",
-			"inherits": "debug",
-			"targets": [
-				"all",
-				"dado_example_plugin"
-			]
-		},
-		{
-			"name": "macos-dado-release",
-			"displayName": "Release",
-			"configurePreset": "macos-dado",
-			"inherits": "release",
-			"targets": [
-				"all",
-				"dado_example_plugin"
-			]
-		},
-		{
 			"name": "macos-arm-debug",
 			"displayName": "Debug",
 			"configurePreset": "macos-arm",
@@ -506,26 +439,6 @@
 			"displayName": "Release",
 			"configurePreset": "macos-arm",
 			"inherits": "release"
-		},
-		{
-			"name": "macos-arm-dado-debug",
-			"displayName": "Debug",
-			"configurePreset": "macos-arm-dado",
-			"inherits": "debug",
-			"targets": [
-				"all",
-				"dado_example_plugin"
-			]
-		},
-		{
-			"name": "macos-arm-dado-release",
-			"displayName": "Release",
-			"configurePreset": "macos-arm-dado",
-			"inherits": "release",
-			"targets": [
-				"all",
-				"dado_example_plugin"
-			]
 		},
 		{
 			"name": "clang-cl-debug",
@@ -794,23 +707,6 @@
 			"inherits": "integration-debug"
 		},
 		{
-			"name": "linux-dado-test",
-			"displayName": "Dado mod harness",
-			"configurePreset": "linux-dado",
-			"inherits": "test",
-			"filter": {
-				"include": {
-					"label": "dado"
-				}
-			}
-		},
-		{
-			"name": "linux-dado-integration",
-			"displayName": "Integration Tests",
-			"configurePreset": "linux-dado",
-			"inherits": "integration"
-		},
-		{
 			"name": "linux-gles-test",
 			"displayName": "Unit Tests",
 			"configurePreset": "linux-gles",
@@ -871,23 +767,6 @@
 			"inherits": "integration-debug"
 		},
 		{
-			"name": "macos-dado-test",
-			"displayName": "Dado mod harness",
-			"configurePreset": "macos-dado",
-			"inherits": "test",
-			"filter": {
-				"include": {
-					"label": "dado"
-				}
-			}
-		},
-		{
-			"name": "macos-dado-integration",
-			"displayName": "Integration Tests",
-			"configurePreset": "macos-dado",
-			"inherits": "integration"
-		},
-		{
 			"name": "macos-arm-test",
 			"displayName": "Unit Tests",
 			"configurePreset": "macos-arm",
@@ -916,23 +795,6 @@
 			"displayName": "Integration Tests (Debug)",
 			"configurePreset": "macos-arm",
 			"inherits": "integration-debug"
-		},
-		{
-			"name": "macos-arm-dado-test",
-			"displayName": "Dado mod harness",
-			"configurePreset": "macos-arm-dado",
-			"inherits": "test",
-			"filter": {
-				"include": {
-					"label": "dado"
-				}
-			}
-		},
-		{
-			"name": "macos-arm-dado-integration",
-			"displayName": "Integration Tests",
-			"configurePreset": "macos-arm-dado",
-			"inherits": "integration"
 		},
 		{
 			"name": "clang-cl-test",

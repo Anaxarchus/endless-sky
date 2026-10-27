@@ -188,6 +188,12 @@ public:
 	// In the case of buying, return whether the ship could be purchased.
 	// In the case of a gift, return a pointer to the newly instantiated ship.
 	bool BuyShip(const Ship *model, const std::string &name);
+	// Deliver a new ship that was ordered (mods, mod API 9): charge the
+	// full new price (ModHarness::NewShipCost) and add it to the fleet as a brand-new hull.
+	// Unlike BuyShip, it leaves the shops alone: the outfit and ship stock, the
+	// stock's depreciation records, and the shelf stock. Returns false if the
+	// player cannot pay.
+	bool DeliverShip(const Ship *model, const std::string &name);
 	const Ship *GiftShip(const Ship *model, const std::string &name, const std::string &id);
 	void SellShip(const Ship *selected, bool storeOutfits = false);
 	// Take the ship from the player, if a model is specified this will permanently remove outfits in said model,
@@ -244,6 +250,9 @@ public:
 	// Get mission information.
 	const std::list<Mission> &Missions() const;
 	const std::list<Mission> &AvailableJobs() const;
+	// Put a job a mod made on this planet's job board (mod API 8). Refused
+	// when a job or mission of the same name is already offered or taken.
+	bool AddJob(Mission &&job);
 	bool HasAvailableInflightMissions() const;
 
 	// For all active missions, cache information that can be requested often but does not change often,
@@ -305,10 +314,6 @@ public:
 
 	// Access the "condition" flags for this player.
 	ConditionsStore &Conditions();
-	// Text that Dado mods keep with this pilot, by mod and key (mod API 6). An
-	// empty value removes the key. Saved and loaded with the pilot.
-	const std::string &ModData(const std::string &mod, const std::string &key) const;
-	void SetModData(const std::string &mod, const std::string &key, const std::string &value);
 	const ConditionsStore &Conditions() const;
 	// Maps defined names for gifted ships to UUIDs for the ship instances.
 	const std::map<std::string, EsUuid> &GiftedShips() const;
@@ -570,8 +575,6 @@ private:
 
 	ConditionsStore conditions;
 	std::map<std::string, EsUuid> giftedShips;
-	// Dado mods' text, by mod, then key.
-	std::map<std::string, std::map<std::string, std::string>> modData;
 
 	std::set<const System *> seen;
 	std::set<const System *> visitedSystems;

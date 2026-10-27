@@ -263,10 +263,10 @@ int main(int argc, char *argv[])
 			Audio::SetVolume(0, SoundCategory::MASTER);
 
 		CustomEvents::Init();
+		// End the mods while the game state they were handed still exists, however the loop ends.
+		struct EndMods { ~EndMods() { ModHarness::Shutdown(); } } endMods;
 		// This is the main loop where all the action begins.
 		GameLoop(player, queue, conversation, testToRunName, debugMode);
-		// End the mods while the game state they were handed still exists.
-		ModHarness::Shutdown();
 	}
 	catch(Test::known_failure_tag)
 	{

@@ -133,7 +133,7 @@ public:
 	int TakeDamage(std::vector<Visual> &visuals, const DamageDealt &damage, const Government *hitBy);
 
 
-	// The Dado mod harness sets levels directly, clamped to their capacities.
+	// The mod harness sets levels directly, clamped to their capacities.
 	friend class ModHarness;
 
 

@@ -147,7 +147,7 @@ void MapDetailPanel::Draw()
 	DrawOrbits();
 	DrawInfo();
 	DrawKey();
-	// The Dado mods' notes on the selected system, below the map key.
+	// The mods' notes on the selected system, below the map key.
 	if(!isSimplified)
 		ModHarness::DrawMapDetails(selectedSystem, Screen::Top() + SpriteSet::Get("ui/orbits and key")->Height());
 	FinishDrawing(isStars ? "is stars" : "is ports");

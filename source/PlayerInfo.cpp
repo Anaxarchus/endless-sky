@@ -33,6 +33,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "Logger.h"
 #include "Messages.h"
 #include "ModHarness.h"
+#include "modding/ModState.h"
 #include "Outfit.h"
 #include "Person.h"
 #include "PilotProfile.h"
@@ -237,93 +238,24 @@ bool PlayerInfo::ScheduledEvent::operator<(const ScheduledEvent &other) const
 
 
 
+bool PlayerInfo::AddJob(Mission &&job)
+{
+	auto same = [&job](const Mission &other) { return other.TrueName() == job.TrueName(); };
+	if(any_of(availableJobs.begin(), availableJobs.end(), same) || any_of(missions.begin(), missions.end(), same))
+		return false;
+	availableJobs.push_back(std::move(job));
+	return true;
+}
+
+
+
 // Completely clear all loaded information, to prepare for loading a file or
 // creating a new pilot.
-namespace {
-	// A mod's text may hold anything, but a save file's token cannot hold both
-	// kinds of quote, or a line break. Those, the percent sign and the other
-	// control characters are written as %XX.
-	string EncodeModData(const string &text)
-	{
-		static const char *HEX = "0123456789ABCDEF";
-		string out;
-		out.reserve(text.size());
-		for(unsigned char c : text)
-		{
-			if(c == '%' || c == '"' || c == '`' || c < 0x20 || c == 0x7F)
-			{
-				out += '%';
-				out += HEX[c >> 4];
-				out += HEX[c & 15];
-			}
-			else
-				out += static_cast<char>(c);
-		}
-		return out;
-	}
-
-	string DecodeModData(const string &text)
-	{
-		auto hex = [](char c) -> int {
-			if(c >= '0' && c <= '9')
-				return c - '0';
-			if(c >= 'A' && c <= 'F')
-				return c - 'A' + 10;
-			if(c >= 'a' && c <= 'f')
-				return c - 'a' + 10;
-			return -1;
-		};
-		string out;
-		out.reserve(text.size());
-		for(size_t i = 0; i < text.size(); ++i)
-		{
-			if(text[i] == '%' && i + 2 < text.size() && hex(text[i + 1]) >= 0 && hex(text[i + 2]) >= 0)
-			{
-				out += static_cast<char>(hex(text[i + 1]) * 16 + hex(text[i + 2]));
-				i += 2;
-			}
-			else
-				out += text[i];
-		}
-		return out;
-	}
-}
-
-
-
-const string &PlayerInfo::ModData(const string &mod, const string &key) const
-{
-	static const string none;
-	auto it = modData.find(mod);
-	if(it == modData.end())
-		return none;
-	auto vit = it->second.find(key);
-	return vit == it->second.end() ? none : vit->second;
-}
-
-
-
-void PlayerInfo::SetModData(const string &mod, const string &key, const string &value)
-{
-	if(value.empty())
-	{
-		auto it = modData.find(mod);
-		if(it != modData.end())
-		{
-			it->second.erase(key);
-			if(it->second.empty())
-				modData.erase(it);
-		}
-		return;
-	}
-	modData[mod][key] = value;
-}
-
-
-
 void PlayerInfo::Clear()
 {
 	*this = PlayerInfo();
+	// New and Load both start here: each is another pilot to the mods.
+	ModState::Clear();
 
 	Random::Seed(time(nullptr));
 	GameData::Revert();
@@ -570,12 +502,8 @@ void PlayerInfo::Load(const filesystem::path &path, const shared_ptr<PilotProfil
 			availableMissions.emplace_back(child, &conditions, &visitedSystems, &visitedPlanets);
 		else if(key == "conditions")
 			conditions.Load(child);
-		else if(key == "mod data")
-		{
-			for(const DataNode &grand : child)
-				if(grand.Size() >= 3)
-					modData[grand.Token(0)][grand.Token(1)] = DecodeModData(grand.Token(2));
-		}
+		else if(key == "mod data" || key == "ship stock")
+			ModState::Load(child);
 		else if(key == "gifted ships" && child.HasChildren())
 		{
 			for(const DataNode &grand : child)
@@ -837,23 +765,6 @@ void PlayerInfo::FinishTransaction()
 
 
 // Apply the given set of changes to the game data.
-namespace {
-	// Whether a change to a system only sets its government. That moves and
-	// links nothing, so the galaxy's neighbors, routes and seen systems need no
-	// recomputing (which takes tens of milliseconds).
-	bool OnlyChangesGovernment(const DataNode &node)
-	{
-		if(!node.HasChildren())
-			return false;
-		for(const DataNode &child : node)
-			if(child.Token(0) != "government")
-				return false;
-		return true;
-	}
-}
-
-
-
 void PlayerInfo::AddChanges(list<DataNode> &changes, bool instantChanges)
 {
 	bool changedPlanets = false;
@@ -866,7 +777,7 @@ void PlayerInfo::AddChanges(list<DataNode> &changes, bool instantChanges)
 		if(key == "date")
 			continue;
 		changedPlanets |= (key == "planet" || key == "wormhole");
-		changedSystems |= ((key == "system" && !OnlyChangesGovernment(change)) || key == "link" || key == "unlink");
+		changedSystems |= (key == "system" || key == "link" || key == "unlink");
 		changedShops |= (key == "outfitter" || key == "shipyard");
 		GameData::Change(change, *this);
 	}
@@ -1454,6 +1365,32 @@ bool PlayerInfo::BuyShip(const Ship *model, const string &name)
 	depreciation.Buy(*model, day, &stockDepreciation);
 	for(const auto &[outfit, count] : model->Outfits())
 		stock[outfit] -= count;
+
+	if(ships.back()->HasBays())
+		displayCarrierHelp = true;
+	return true;
+}
+
+
+
+// Adds a newly built ship of the given model, delivered after an order, at its
+// full new price. The shops' stock and depreciation records are not touched.
+bool PlayerInfo::DeliverShip(const Ship *model, const string &name)
+{
+	if(!model)
+		return false;
+
+	int64_t cost = ModHarness::NewShipCost(model);
+	if(accounts.Credits() < cost)
+		return false;
+
+	AddStockShip(model, name);
+
+	accounts.AddCredits(-cost);
+	flagship.reset();
+
+	// A new hull and new outfits, bought today, from no one's stock.
+	depreciation.Buy(*model, date.DaysSinceEpoch());
 
 	if(ships.back()->HasBays())
 		displayCarrierHelp = true;
@@ -4045,6 +3982,8 @@ void PlayerInfo::ValidateLoad()
 		Logger::Log("Reset the travel plan due to use of invalid system(s).", Logger::Level::WARNING);
 	}
 
+	ModState::Validate();
+
 	// For old saves, default to the first start condition (the default "Endless Sky" start).
 	if(startData.Identifier().empty())
 	{
@@ -4126,10 +4065,10 @@ void PlayerInfo::RegisterDerivedConditions()
 	// Bound financial conditions to +/- 4.6 x 10^18 credits, within the range of a 64-bit int.
 	static constexpr int64_t limit = static_cast<int64_t>(1) << 62;
 
-	// Whether the Dado mod harness is built in, and how many mods it loaded (see modding/README.md).
-	conditions["dado harness"].ProvideNamed([](const ConditionEntry &ce) -> int64_t {
-		return ModHarness::IsBuiltIn(); });
-	conditions["dado mods loaded"].ProvideNamed([](const ConditionEntry &ce) -> int64_t {
+	// How many mod loaders are open, and how many mods they loaded (see docs/modding-api.md).
+	conditions["mod loaders"].ProvideNamed([](const ConditionEntry &ce) -> int64_t {
+		return ModHarness::LoaderCount(); });
+	conditions["mods loaded"].ProvideNamed([](const ConditionEntry &ce) -> int64_t {
 		return ModHarness::LoadedCount(); });
 	conditions["net worth"].ProvideNamed([this](const ConditionEntry &ce) {
 		return min(limit, max(-limit, accounts.NetWorth())); });
@@ -5369,18 +5308,8 @@ void PlayerInfo::Save(DataWriter &out) const
 	// Save any "primary condition" flags that are set.
 	conditions.Save(out);
 
-	// Text that Dado mods keep with this pilot.
-	if(!modData.empty())
-	{
-		out.Write("mod data");
-		out.BeginChild();
-		{
-			for(const auto &[mod, values] : modData)
-				for(const auto &[name, value] : values)
-					out.Write(mod, name, EncodeModData(value));
-		}
-		out.EndChild();
-	}
+	// What the mods keep with this pilot.
+	ModState::Save(out);
 
 	// Save the UUID of any ships given to the player with a specified name, and ship class.
 	if(!giftedShips.empty())

@@ -58,6 +58,14 @@ private:
 	void SellShipAndOutfits();
 	void SellShipChassis();
 	void SellShip(bool toStorage);
+	// The shelf count a mod tracks for this model here, or -1 if untracked
+	// (stock tracking off, or this model untracked at this planet).
+	int Stock(const Ship *model) const;
+	// How many of this model can be bought here, or -1 if unlimited.
+	int Available(const Ship *model) const;
+	// The label for this model's stock on its tile or in the details pane, or
+	// an empty string if there is nothing to say.
+	std::string StockLabel(const Ship *model, bool isDetails) const;
 
 
 private:

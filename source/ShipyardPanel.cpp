@@ -18,6 +18,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "text/Alignment.h"
 #include "comparators/BySeriesAndIndex.h"
 #include "ClickZone.h"
+#include "Color.h"
 #include "DialogPanel.h"
 #include "text/DisplayText.h"
 #include "shader/FillShader.h"
@@ -28,6 +29,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "Gamerules.h"
 #include "Government.h"
 #include "Mission.h"
+#include "modding/ModState.h"
 #include "Phrase.h"
 #include "Planet.h"
 #include "PlayerInfo.h"
@@ -112,6 +114,22 @@ void ShipyardPanel::DrawItem(const string &name, const Point &point)
 		return;
 
 	DrawShip(*ship, point, ship == selectedShip);
+
+	// Show how many are left if a mod tracks this shipyard's stock, and dim the
+	// tile when there are none.
+	const string label = StockLabel(ship, false);
+	if(!label.empty())
+	{
+		bool isOut = !Available(ship);
+		// The ship's name is drawn in the top 30 px of the tile; leave it bright.
+		if(isOut)
+			FillShader::Fill(point + Point(0., 15.), Point(SHIP_SIZE, SHIP_SIZE - 30.),
+				*GameData::Colors().Get("shop out of stock tile"));
+		const Font &font = FontSet::Get(14);
+		const Color &color = *GameData::Colors().Get(isOut ? "shop out of stock" : "medium");
+		Point offset(-SIDEBAR_CONTENT / 2, .5 * SHIP_SIZE - 24.);
+		font.Draw({label, {SIDEBAR_CONTENT, Alignment::CENTER, Truncate::MIDDLE}}, point + offset, color);
+	}
 }
 
 
@@ -137,8 +155,19 @@ double ShipyardPanel::DrawDetails(const Point &center)
 		shipInfo.Update(*selectedShip, player, hasFleetCapacity, collapsed.contains(DESCRIPTION), true);
 		selectedItem = selectedShip->DisplayModelName();
 
-		const Point spriteCenter(center.X(), center.Y() + 20 + TileSize() / 2);
-		const Point startPoint(center.X() - INFOBAR_WIDTH / 2 + 20, center.Y() + 20 + TileSize());
+		// If there is anything to say about this model's stock, say it under the
+		// name, and move everything below it down a line.
+		const string label = StockLabel(selectedShip, true);
+		const double stockOffset = label.empty() ? 0. : 20.;
+		if(!label.empty())
+		{
+			const Color &color = *GameData::Colors().Get(Available(selectedShip) ? "medium" : "shop out of stock");
+			const Point labelPoint(center.X() - INFOBAR_WIDTH / 2, center.Y() + 20.);
+			font.Draw({label, {INFOBAR_WIDTH, Alignment::CENTER}}, labelPoint, color);
+		}
+
+		const Point spriteCenter(center.X(), center.Y() + 20 + stockOffset + TileSize() / 2);
+		const Point startPoint(center.X() - INFOBAR_WIDTH / 2 + 20, center.Y() + 20 + stockOffset + TileSize());
 		const Sprite *background = SpriteSet::Get("ui/shipyard selected");
 		SpriteShader::Draw(background, spriteCenter);
 
@@ -335,6 +364,14 @@ ShopPanel::TransactionResult ShipyardPanel::CanDoBuyButton() const
 	if(!selectedShip)
 		return false;
 
+	if(!Available(selectedShip))
+	{
+		// A mod may say where else this model can be had.
+		const string &note = ModState::ShipOrderNote(planet, selectedShip);
+		return "This ship is out of stock. "
+			+ (note.empty() ? "New hulls are on order; check back in a few days."s : note);
+	}
+
 	int64_t cost = player.StockDepreciation().Value(*selectedShip, day);
 
 	// Check that the player has any necessary licenses.
@@ -382,12 +419,19 @@ void ShipyardPanel::DoBuyButton()
 	const string &quantity = selectedQuantity->Text();
 	modifier = quantity.empty() ? 1 : stoi(quantity);
 	string message;
+	// Never buy more than the shipyard has in stock.
+	int count = Available(selectedShip);
+	if(count >= 0 && modifier > count)
+	{
+		modifier = count;
+		message = "Only " + to_string(count) + " in stock. ";
+	}
 	if(licenseCost)
-		message = "Note: you will need to pay " + Format::CreditString(licenseCost)
+		message += "Note: you will need to pay " + Format::CreditString(licenseCost)
 			+ " for the licenses required to operate this ship, in addition to its cost."
 			" If that is okay with you, go ahead and enter a name for your brand new ";
 	else
-		message = "Enter a name for your brand new ";
+		message += "Enter a name for your brand new ";
 
 	if(modifier == 1)
 		message += selectedShip->DisplayModelName() + "! (Or leave it blank to use a randomly chosen name.)";
@@ -484,6 +528,9 @@ bool ShipyardPanel::BuyShip(const string &name)
 
 	for(int i = 1; i <= modifier; ++i)
 	{
+		if(!Available(selectedShip))
+			break;
+
 		// If no name is given, choose a random name. Otherwise, if buying
 		// multiple ships, append a number to the given ship name.
 		string shipName = name;
@@ -494,6 +541,10 @@ bool ShipyardPanel::BuyShip(const string &name)
 
 		if(!player.BuyShip(selectedShip, shipName))
 			break;
+		// Only a purchase here takes a hull off the shelf; other ways of adding
+		// a ship to the fleet do not.
+		if(ModState::ShipStockEnabled())
+			ModState::AddShipStock(planet, selectedShip, -1);
 	}
 
 	playerShip = &*player.Ships().back();
@@ -524,7 +575,23 @@ void ShipyardPanel::SellShipChassis()
 void ShipyardPanel::SellShip(bool storeOutfits)
 {
 	for(Ship *ship : playerShips)
+	{
+		// Find the models before the ship is gone. The shipyard buys the hull,
+		// whether or not its outfits are kept. If this shipyard sells the ship's
+		// exact variant (known only until the game is reloaded, as variant names
+		// are not saved) or its base model, and a mod tracks that model here, the
+		// hull goes back on that shelf for good. Otherwise it is gone, as always.
+		const Ship *variant = GameData::Ships().Find(ship->VariantName());
+		const Ship *model = GameData::Ships().Find(ship->TrueModelName());
 		player.SellShip(ship, storeOutfits);
+		if(any_of(player.Ships().begin(), player.Ships().end(),
+				[ship](const shared_ptr<Ship> &owned) { return owned.get() == ship; }))
+			continue;
+		if(variant && variant->IsValid() && shipyard.Has(variant) && Stock(variant) >= 0)
+			ModState::AddShipStock(planet, variant, 1);
+		else if(model && model->IsValid() && shipyard.Has(model) && Stock(model) >= 0)
+			ModState::AddShipStock(planet, model, 1);
+	}
 	playerShips.clear();
 	playerShip = nullptr;
 	for(const shared_ptr<Ship> &ship : player.Ships())
@@ -535,6 +602,34 @@ void ShipyardPanel::SellShip(bool storeOutfits)
 		}
 	if(playerShip)
 		playerShips.insert(playerShip);
+}
+
+
+
+int ShipyardPanel::Stock(const Ship *model) const
+{
+	if(!planet || !ModState::ShipStockEnabled())
+		return -1;
+	return ModState::ShipStock(planet, model);
+}
+
+
+
+int ShipyardPanel::Available(const Ship *model) const
+{
+	return Stock(model);
+}
+
+
+
+string ShipyardPanel::StockLabel(const Ship *model, bool isDetails) const
+{
+	int total = Available(model);
+	if(total < 0)
+		return "";
+	if(!total)
+		return isDetails ? "Out of stock" : "out of stock";
+	return isDetails ? "In stock: " + to_string(total) : to_string(total) + " in stock";
 }
 
 

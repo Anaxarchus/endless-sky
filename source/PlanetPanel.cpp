@@ -90,7 +90,7 @@ PlanetPanel::PlanetPanel(PlayerInfo &player, function<void()> callback)
 
 	Audio::Pause();
 
-	// Let the Dado mods know where the player is, so they can offer a planet button.
+	// Let the mods know where the player is, so they can offer a planet button.
 	ModHarness::Landed(player);
 }
 
@@ -262,7 +262,7 @@ void PlanetPanel::Draw()
 	const Interface *ui = GameData::Interfaces().Get(Screen::Width() < 1280 ? "planet (small screen)" : "planet");
 	ui->Draw(info, this);
 
-	// A button for the Dado mods, in the free slot above "Depart".
+	// A button for the mods, in the free slot above "Depart".
 	string modLabel = ModHarness::PlanetButtonLabel();
 	if(!modLabel.empty())
 	{
