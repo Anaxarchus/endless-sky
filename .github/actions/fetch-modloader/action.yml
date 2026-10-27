@@ -1,0 +1,34 @@
+# Argosy (not upstream): downloads the Dado mod loader pinned in
+# .github/modloader-version, checks it against the release's SHA256SUMS and
+# puts the library in <dest>/modloaders/ (with its README and licences in
+# <dest>/modloaders/esdado/). See docs/releasing.md.
+name: Fetch mod loader
+description: Download, verify and extract the bundled Dado mod loader.
+inputs:
+  platform:
+    description: 'Loader archive platform: macos-universal, linux-x86_64, linux-aarch64 or windows-x86_64'
+    required: true
+  dest:
+    description: 'Folder that gets a modloaders/ subfolder (the package resources folder, or a staging folder)'
+    required: true
+  token:
+    description: 'Token for gh (reading a public release needs no special scope)'
+    required: false
+    default: ${{ github.token }}
+outputs:
+  version:
+    description: 'The loader version bundled (the tag without "v")'
+    value: ${{ steps.fetch.outputs.version }}
+  library:
+    description: 'Path of the library put in place'
+    value: ${{ steps.fetch.outputs.library }}
+runs:
+  using: composite
+  steps:
+    - name: Fetch, verify and extract the loader
+      id: fetch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        PIN_FILE: ${{ github.workspace }}/.github/modloader-version
+      run: bash "$GITHUB_ACTION_PATH/fetch.sh" "${{ inputs.platform }}" "${{ inputs.dest }}"

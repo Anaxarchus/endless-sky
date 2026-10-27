@@ -22,6 +22,11 @@ on:
         required: false
         type: boolean
         default: true
+      bundle_loader:
+        description: 'Bundle the Dado mod loader pinned in .github/modloader-version'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -41,6 +46,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
       apply_patches: ${{ steps.version.outputs.apply_patches }}
+      bundle_loader: ${{ steps.version.outputs.bundle_loader }}
     steps:
       - name: Work out version
         id: version
@@ -50,14 +56,17 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_APPLY: ${{ inputs.apply_patches }}
+          INPUT_BUNDLE: ${{ inputs.bundle_loader }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = push ]; then
             raw="$REF_NAME"
             apply=true
+            bundle=true
           else
             raw="$INPUT_VERSION"
             apply="$INPUT_APPLY"
+            bundle="$INPUT_BUNDLE"
           fi
           if ! [[ "$raw" =~ ^v?[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
             echo "::error title=Bad version::\"$raw\" is not a valid version (letters, digits, '.', '_', '+', '-')."
@@ -67,6 +76,7 @@ jobs:
           tag="v$version"
           if [[ "$tag" == *-* ]]; then prerelease=true; else prerelease=false; fi
           [ "$apply" = true ] || apply=false
+          [ "$bundle" = true ] || bundle=false
           # A manual run releases the commit it was started on; refuse if the tag
           # already exists and points somewhere else.
           if [ "$EVENT" != push ]; then
@@ -82,8 +92,9 @@ jobs:
             echo "version=$version"
             echo "prerelease=$prerelease"
             echo "apply_patches=$apply"
+            echo "bundle_loader=$bundle"
           } >> "$GITHUB_OUTPUT"
-          echo "Tag: $tag, file version: $version, prerelease: $prerelease, patches: $apply"
+          echo "Tag: $tag, file version: $version, prerelease: $prerelease, patches: $apply, bundled loader: $bundle"
 
 
   # Fork: the mod loader host test (tests/modloader/run.sh).
@@ -157,8 +168,35 @@ jobs:
           cmake --build build --preset linux-ci-release
         env:
           VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      # Fork: the bundled mod loader. build_appimage.sh installs into AppDir/
+      # without clearing it, then moves usr/share/games/endless-sky/* to the
+      # AppDir root, which is the AppImage's resources folder (where credits.txt
+      # is). So modloaders/ put there first ends up next to data/.
+      - name: Fetch mod loader
+        if: needs.setup.outputs.bundle_loader == 'true'
+        uses: ./.github/actions/fetch-modloader
+        with:
+          platform: linux-x86_64
+          dest: AppDir/usr/share/games/endless-sky
       - name: Package Application
         run: ./utils/build_appimage.sh build/release
+      # Fork: check that the loader is in the AppImage, next to credits.txt.
+      - name: Check bundled mod loader
+        if: needs.setup.outputs.bundle_loader == 'true'
+        run: |
+          set -euo pipefail
+          chmod +x "$OUTPUT"
+          mkdir loader-check
+          cd loader-check
+          "../$OUTPUT" --appimage-extract 'credits.txt' > /dev/null
+          "../$OUTPUT" --appimage-extract 'modloaders/*' > /dev/null
+          ls -lR squashfs-root
+          if [ ! -f squashfs-root/credits.txt ] || [ ! -f squashfs-root/modloaders/libesdado.so ]; then
+            echo "::error title=Mod loader::The AppImage has no modloaders/libesdado.so next to credits.txt. Has utils/build_appimage.sh changed how it lays out AppDir?"
+            exit 1
+          fi
+          cd ..
+          rm -rf loader-check
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -224,11 +262,39 @@ jobs:
           cmake --build build --preset mingw-ci-release
         env:
           VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      # Fork: the bundled mod loader, staged in loader-stage/modloaders/.
+      - name: Fetch mod loader
+        if: needs.setup.outputs.bundle_loader == 'true'
+        uses: ./.github/actions/fetch-modloader
+        with:
+          platform: windows-x86_64
+          dest: loader-stage
       - name: Package Application
         run: |
           cmake --install build/release
+          # Fork: the loader goes next to data/ (the resources folder is the
+          # executable's): copied into the zip's tree, and added to the
+          # installer with CPACK_INSTALLED_DIRECTORIES (no CMakeLists.txt change).
+          $extra = @()
+          if (Test-Path loader-stage/modloaders) {
+            Copy-Item -Recurse -Force loader-stage/modloaders install/release/
+            $stage = (Resolve-Path loader-stage).Path -replace '\\', '/'
+            $extra = @('-D', "CPACK_INSTALLED_DIRECTORIES=$stage;/")
+          }
           7z a ${{ env.OUTPUT_ZIP }} "./install/release/*"
-          cpack --config build/release/CPackConfig.cmake
+          cpack --config build/release/CPackConfig.cmake @extra
+      # Fork: check that the zip and the installer have the loader.
+      - name: Check bundled mod loader
+        if: needs.setup.outputs.bundle_loader == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in "$OUTPUT_ZIP" "$OUTPUT_EXE"; do
+            if ! 7z l "$f" | grep -iE 'modloaders[\\/]esdado\.dll' ; then
+              echo "::error title=Mod loader::$f has no modloaders/esdado.dll."
+              exit 1
+            fi
+          done
       - name: Upload zip artifact
         uses: actions/upload-artifact@v4
         with:
@@ -363,6 +429,12 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       OUTPUT: Endless-Sky-${{ needs.setup.outputs.version }}
     steps:
+      # Fork: .github only, for the fetch-modloader action and its pin file.
+      - uses: actions/checkout@v5
+        if: needs.setup.outputs.bundle_loader == 'true'
+        with:
+          show-progress: false
+          sparse-checkout: .github
       # Fork: each artifact is downloaded into its own folder (x64/, arm/) so
       # that the zip lands at x64/macos-artifact-x64.zip.
       - uses: actions/download-artifact@v4
@@ -386,6 +458,40 @@ jobs:
           cp -r "arm/Endless Sky.app" "Endless Sky.app"
           lipo -create -output "Endless Sky.app/Contents/MacOS/Endless Sky" "arm/Endless Sky.app/Contents/MacOS/Endless Sky" "x64/Endless Sky.app/Contents/MacOS/Endless Sky"
           for lib in "Endless Sky.app/Contents/Frameworks/"*; do lipo -create -output "$lib" "arm/Endless Sky.app/Contents/Frameworks/$(basename "$lib")" "x64/Endless Sky.app/Contents/Frameworks/$(basename "$lib")"; done
+      # Fork: the bundled mod loader, in the app's resources folder (what
+      # SDL_GetBasePath returns for a bundle, so Files::Resources()/modloaders).
+      - name: Fetch mod loader
+        if: needs.setup.outputs.bundle_loader == 'true'
+        uses: ./.github/actions/fetch-modloader
+        with:
+          platform: macos-universal
+          dest: Endless Sky.app/Contents/Resources
+      # Fork: the universal dylib is signed ad hoc by the loader's release. This
+      # workflow does not sign the app (its binaries carry only the linker's ad
+      # hoc signature, with no sealed resources), so adding a file to Resources
+      # breaks nothing. If the app ever has a sealed signature here, re-seal it
+      # ad hoc so that it stays valid.
+      - name: Check bundled mod loader and signatures
+        if: needs.setup.outputs.bundle_loader == 'true'
+        run: |
+          set -euo pipefail
+          app="Endless Sky.app"
+          lib="$app/Contents/Resources/modloaders/libesdado.dylib"
+          archs=$(lipo -archs "$lib")
+          echo "libesdado.dylib: $archs"
+          if [[ "$archs" != *arm64* || "$archs" != *x86_64* ]]; then
+            echo "::error title=Mod loader::libesdado.dylib is not universal (arm64 and x86_64): $archs"
+            exit 1
+          fi
+          codesign --verify --verbose=2 "$lib"
+          codesign -dv "$lib" 2>&1 | grep -E '^(Signature|Identifier|Format)' || true
+          if [ -e "$app/Contents/_CodeSignature/CodeResources" ]; then
+            echo "The app has a sealed signature; re-signing it ad hoc after adding the loader."
+            codesign --force --sign - "$app"
+            codesign --verify --strict --verbose=2 "$app"
+          else
+            echo "The app has no sealed signature; nothing to re-sign."
+          fi
       - name: Package Application
         run: |
           mkdir "${{ env.OUTPUT }}"
@@ -413,7 +519,7 @@ jobs:
       VERSION: ${{ needs.setup.outputs.version }}
       PRERELEASE: ${{ needs.setup.outputs.prerelease }}
       APPLY_PATCHES: ${{ needs.setup.outputs.apply_patches }}
-      LOADER_REPO: Anaxarchus/es-modloader
+      BUNDLE_LOADER: ${{ needs.setup.outputs.bundle_loader }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -445,6 +551,7 @@ jobs:
           api=$(sed -n 's/^#define ES_API_VERSION \([0-9][0-9]*\).*/\1/p' source/modding/es_api.h)
           api_min=$(sed -n 's/^#define ES_API_MIN_VERSION \([0-9][0-9]*\).*/\1/p' source/modding/es_api.h)
           [ -n "$api" ] || { echo "::error::ES_API_VERSION not found in source/modding/es_api.h"; exit 1; }
+          read -r loader_repo loader_tag < <(grep -v '^[[:space:]]*\(#\|$\)' .github/modloader-version | head -n 1)
           server="${GITHUB_SERVER_URL:-https://github.com}"
           repo_url="$server/$GITHUB_REPOSITORY"
           {
@@ -478,7 +585,25 @@ jobs:
             echo
             echo "Mod API version: **$api** (\`ES_API_VERSION\` in [\`source/modding/es_api.h\`]($repo_url/blob/$TAG/source/modding/es_api.h)); the game accepts loaders built for API $api_min or later."
             echo
-            echo "This build does not include a mod loader. Get a mod loader at [github.com/$LOADER_REPO]($server/$LOADER_REPO/releases), and put it in a \`modloaders\` folder in the game's config folder (the one that holds \`plugins/\` and \`saves/\`). See [docs/modding-api.md]($repo_url/blob/$TAG/docs/modding-api.md)."
+            if [ "$BUNDLE_LOADER" = true ]; then
+              echo "This build includes the **Dado mod loader ${loader_tag#v}** ([release]($server/$loader_repo/releases/tag/$loader_tag)), in the game's own \`modloaders\` folder, so plugins with mods in a \`scripts/\` folder run with no setup. To use another version of it, or another loader, put the library in a \`modloaders\` folder in the config folder (below): a file with the bundled one's name (\`libesdado.dylib\`, \`libesdado.so\`, \`esdado.dll\`) replaces it, and any other loader is opened beside it."
+            else
+              echo "This build does not include a mod loader. Get one at [github.com/$loader_repo]($server/$loader_repo/releases), and put it in a \`modloaders\` folder in the config folder (below)."
+            fi
+            echo
+            echo "See [docs/modding-api.md]($repo_url/blob/$TAG/docs/modding-api.md)."
+            echo
+            echo "## Config folder"
+            echo
+            echo "This fork, Argosy, keeps its own config folder (saves, preferences, \`plugins/\`, \`modloaders/\`), apart from an installed Endless Sky's:"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| macOS | \`~/Library/Application Support/argosy/\` |"
+            echo "| Linux | \`~/.local/share/argosy/\` |"
+            printf '| Windows | %s |\n' "\`%APPDATA%\\argosy\\\`"
+            echo
+            echo "It does not read or copy Endless Sky's saves. To bring them over, copy \`saves/\` from the \`endless-sky\` folder in the same place into the \`argosy\` one."
             echo
             echo "## macOS: unsigned build"
             echo

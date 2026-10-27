@@ -1,0 +1,229 @@
+# Argosy (not upstream): checks every week whether upstream Endless Sky still
+# merges into the fork. It test-merges endless-sky/endless-sky master in the
+# runner (never committed or pushed), runs the fork's checks on the result, and
+# keeps one open issue labelled "upstream-check" up to date: opened or commented
+# on when something fails, closed when everything passes again. See
+# docs/upstream.md.
+
+name: Upstream Check
+
+on:
+  schedule:
+    # Mondays at 05:23 UTC.
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      build:
+        description: 'Also build the merged game on Linux and run its tests (slower)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/endless-sky/endless-sky.git
+  UPSTREAM_BRANCH: master
+
+jobs:
+  merge:
+    name: Merge and check
+    if: github.repository != 'endless-sky/endless-sky'
+    runs-on: ubuntu-24.04
+    outputs:
+      status: ${{ steps.check.outputs.status }}
+      merged: ${{ steps.check.outputs.merged }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          fetch-depth: 0
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev
+      - name: Merge upstream and run the checks
+        id: check
+        run: |
+          set -euo pipefail
+          ./.github/upstream-check.sh report
+          echo "status=$(cat report/status)" >> "$GITHUB_OUTPUT"
+          echo "merged=$(cat report/merged)" >> "$GITHUB_OUTPUT"
+          cat report/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-check-report
+          path: report/
+          if-no-files-found: ignore
+
+
+  # Optional: build the merged tree (with the gameplay patches when they apply)
+  # the way ci.yml's Ubuntu job does, and run its tests. The vcpkg and ccache
+  # caches make later runs much faster than the first.
+  build:
+    name: Build merged game
+    needs: merge
+    if: needs.merge.outputs.merged == 'true' && (github.event_name == 'schedule' || inputs.build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      # For the vcpkg binary cache (TAServers/vcpkg-cache), as in ci.yml.
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+          fetch-depth: 0
+      - name: Merge upstream (not committed)
+        run: |
+          set -euo pipefail
+          git config user.name upstream-check
+          git config user.email upstream-check@invalid
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "+refs/heads/$UPSTREAM_BRANCH:refs/remotes/upstream/$UPSTREAM_BRANCH"
+          git merge --no-commit --no-ff "upstream/$UPSTREAM_BRANCH"
+          git log -1 --format='upstream: %H %s' "upstream/$UPSTREAM_BRANCH"
+      - name: Apply gameplay patches
+        run: |
+          if sh patches/apply.sh check; then
+            sh patches/apply.sh apply
+          else
+            echo "::warning::The gameplay patches do not apply; building without them."
+          fi
+      - name: Install development dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxmu-dev libxi-dev libgl-dev libglu1-mesa-dev libgles2-mesa-dev libminizip-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libosmesa6 mesa-utils libglvnd-dev x11-utils catch2 libltdl-dev autoconf autoconf-archive automake libtool
+      - name: Disable VM sound card
+        run: |
+          sudo sh -c 'echo "pcm.!default { type plug slave.pcm \"null\" }"  >> /etc/asound.conf'
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ runner.os }}-upstream-check-${{ github.run_id }}
+          restore-keys: ${{ runner.os }}-upstream-check-
+          evict-old-files: '7d'
+          append-timestamp: 'false'
+      - name: Setup vcpkg cache
+        uses: TAServers/vcpkg-cache@v3
+        id: vcpkg-cache
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: lukka/get-cmake@v4.2.3
+      # The vcpkg commit is read from ci.yml after the merge, so it follows upstream.
+      - name: Find vcpkg commit
+        id: vcpkg
+        run: |
+          commit=$(grep -m1 -o "vcpkgGitCommitId: '[0-9a-f]*'" .github/workflows/ci.yml | grep -o '[0-9a-f]\{40\}')
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+      - uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ steps.vcpkg.outputs.commit }}
+      - name: Build and test
+        run: |
+          cmake --preset linux-ci
+          cmake --build build --preset linux-ci
+          ctest --preset linux-ci 2>&1 | tee ctest.log
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,${{ steps.vcpkg-cache.outputs.path }},readwrite"
+      - name: Save the log tail
+        if: failure()
+        run: |
+          mkdir -p build-report
+          { tail -n 60 ctest.log 2>/dev/null || echo "The build failed before the tests; see the run log."; } > build-report/tail.txt
+      - name: Upload build report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-check-build
+          path: build-report/
+          if-no-files-found: ignore
+
+
+  report:
+    name: Report
+    needs: [merge, build]
+    if: always() && needs.merge.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      LABEL: upstream-check
+      MERGE_RESULT: ${{ needs.merge.result }}
+      STATUS: ${{ needs.merge.outputs.status }}
+      BUILD_RESULT: ${{ needs.build.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: upstream-check-report
+          path: report
+      - uses: actions/download-artifact@v4
+        if: needs.build.result == 'failure'
+        continue-on-error: true
+        with:
+          name: upstream-check-build
+          path: build-report
+      - name: Open, update or close the issue
+        run: |
+          set -euo pipefail
+          ok=true
+          {
+            if [ "$MERGE_RESULT" != success ] || [ ! -f report/summary.md ]; then
+              ok=false
+              echo "The check itself did not finish (merge job: $MERGE_RESULT). See the run log."
+            else
+              cat report/summary.md
+              [ "$STATUS" = ok ] || ok=false
+            fi
+            echo
+            case "$BUILD_RESULT" in
+              success) echo "Build and tests of the merged game on Linux: passed." ;;
+              failure)
+                ok=false
+                echo "## Build of the merged game: **failed**"
+                echo
+                echo '```'
+                cat build-report/tail.txt 2>/dev/null || echo "(no log tail; see the run log)"
+                echo '```'
+                ;;
+              cancelled) ok=false; echo "Build of the merged game: cancelled." ;;
+              *) echo "Build of the merged game: not run." ;;
+            esac
+            echo
+            echo "Run: $RUN_URL"
+          } > body.md
+          cat body.md
+
+          gh label create "$LABEL" --color D93F0B --description "Upstream Endless Sky no longer merges or passes the fork's checks" > /dev/null 2>&1 || true
+          issue=$(gh issue list --label "$LABEL" --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ "$ok" = true ]; then
+            if [ -n "$issue" ]; then
+              { echo "Upstream merges cleanly and every check passes again; closing."; echo; cat body.md; } > close.md
+              gh issue comment "$issue" --body-file close.md
+              gh issue close "$issue"
+              echo "Closed #$issue."
+            else
+              echo "All good; no open issue."
+            fi
+          elif [ -n "$issue" ]; then
+            gh issue comment "$issue" --body-file body.md
+            echo "Commented on #$issue."
+          else
+            { echo "The weekly upstream check failed: merging upstream Endless Sky into this fork needs work. See [docs/upstream.md]($GITHUB_SERVER_URL/$GH_REPO/blob/HEAD/docs/upstream.md)."; echo; cat body.md; } > open.md
+            gh issue create --title "Upstream merge check failed" --label "$LABEL" --body-file open.md
+          fi

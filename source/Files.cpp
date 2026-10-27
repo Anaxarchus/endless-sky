@@ -161,7 +161,9 @@ void Files::Init(const char *const *argv)
 	if(config.empty())
 	{
 		// Create the directory for the saved games, preferences, etc., if necessary.
-		char *str = SDL_GetPrefPath(nullptr, "endless-sky");
+		// Argosy: its own config folder, so it does not share saves, plugins or
+		// mod loaders with an installed Endless Sky (upstream uses "endless-sky").
+		char *str = SDL_GetPrefPath(nullptr, "argosy");
 		if(!str)
 			throw runtime_error("Unable to get path to config directory!");
 		config = str;

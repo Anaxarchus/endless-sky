@@ -15,6 +15,18 @@ Once the game's data has loaded, before a pilot is loaded or the main menu is sh
 
 It looks for files with the platform's library extension: `.dylib` on macOS, `.so` on Linux and `.dll` on Windows (in any letter case on Windows). A file in the config folder replaces a file of the same name in the resources folder, as plugins do. Every compatible loader is opened, in the order of the file names.
 
+In Argosy, the config folder is its own, named `argosy` rather than Endless Sky's `endless-sky`, so Argosy and an installed Endless Sky share no saves, preferences, plugins or loaders (`--config <folder>` still overrides it):
+
+| | Config folder | Resources `modloaders/` in a release |
+|---|---|---|
+| macOS | `~/Library/Application Support/argosy/` | `Endless Sky.app/Contents/Resources/modloaders/` |
+| Linux | `~/.local/share/argosy/` (or `$XDG_DATA_HOME/argosy/`) | inside the AppImage, next to `data/` |
+| Windows | `%APPDATA%\argosy\` | next to `data/` in the install folder |
+
+The game copies nothing from the old folder. To bring saves over, copy `saves/` from the Endless Sky folder (`~/Library/Application Support/endless-sky/`, `~/.local/share/endless-sky/` or `%APPDATA%\endless-sky\`) into the Argosy one; plugins can be copied the same way.
+
+Argosy's releases bundle the Dado loader ([Anaxarchus/es-modloader](https://github.com/Anaxarchus/es-modloader)) in the resources `modloaders/` folder (see [releasing.md](releasing.md)). To try another version, or another loader, put it in `<config>/modloaders/`: a file with the bundled one's name replaces it, and any other loader is opened beside it.
+
 For each file, the game:
 
 1. opens it with `SDL_LoadObject`;

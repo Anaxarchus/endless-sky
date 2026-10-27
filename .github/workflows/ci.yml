@@ -432,7 +432,8 @@ jobs:
     # If no code changes occurred then we can download the latest continuous.
     - name: Download latest continuous
       if: ${{ needs.changed.outputs.game_code != 'true' && needs.changed.outputs.cmake_files != 'true' && needs.changed.outputs.ci_config != 'true' }}
-      run: gh release download -R ${{ github.repository }} continuous -p ${{ env.CONTINUOUS }}
+      # Argosy: forks have no "continuous" release, so they parse with upstream's.
+      run: gh release download -R ${{ github.repository_owner == 'endless-sky' && github.repository || 'endless-sky/endless-sky' }} continuous -p ${{ env.CONTINUOUS }}
     - name: Extract and prepare continuous
       if: ${{ needs.changed.outputs.game_code != 'true' && needs.changed.outputs.cmake_files != 'true' && needs.changed.outputs.ci_config != 'true' }}
       run: |

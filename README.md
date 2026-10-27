@@ -1,6 +1,6 @@
-# Endless Sky
+# Argosy
 
-Explore other star systems. Earn money by trading, carrying passengers, or completing missions. Use your earnings to buy a better ship or to upgrade the weapons and engines on your current one. Blow up pirates. Take sides in a civil war. Or leave human space behind and hope to find some friendly aliens whose culture is more civilized than your own...
+Argosy is a fork of Endless Sky created to allow me to have a modding API for scripted plug ins. This fork is largely maintained by Claude so that I can spend my time enjoying the game and writing plugins. Because it's maintained by Claude, it will never be upstreamed. One day when/if a modding API comes to vanilla Endless Sky, this fork will die. Until then, I am calling this fork 'Argosy' and I will be using Claude to optimize, patch, fix, and generally upkeep the base game alongside merging commits from upstream and maintaining the API. Below is Endless Sky's original README. Did I HAVE to use an LLM to do this? No, but I'm here to play, not work. This fork is 'AI' friendly so far as I'm concerned, and serves to enable human creativity not to stifle or replace it.
 
 ------
 
