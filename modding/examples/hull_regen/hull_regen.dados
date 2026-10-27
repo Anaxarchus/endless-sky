@@ -1,0 +1,39 @@
+class HullRegen extends es.Mod
+
+// An example mod: the player's ships slowly regenerate hull while in flight.
+//
+// It stays idle until a mission, an event or the player sets the condition
+// "dado example: enabled", so it can sit in a plugin without changing a game
+// that does not ask for it. While active it counts its steps in
+// "dado example: steps" and its repairs in "dado example: repairs".
+//
+// Build it with `modding/tools/dado-mods.sh mod modding/examples/hull_regen`.
+
+import "imports:sdk/es"
+
+// Hull restored per second, as a fraction of each ship's maximum.
+float rate = 0.02
+
+bool announced = false
+
+string name():
+    return "hull regen"
+
+void on_load(es.Game game):
+    log(game, "loaded")
+
+void on_step(es.Game game, int step):
+    if game.condition("dado example: enabled") == 0:
+        return
+    if !announced:
+        announced = true
+        game.message("Hull regeneration mod active.")
+    game.set_condition("dado example: steps", game.condition("dado example: steps") + 1)
+    if !every(step, 1.0):
+        return
+    for i in player_ships(game):
+        float hull = game.hull(i)
+        float max = game.max_hull(i)
+        if hull < max:
+            game.set_hull(i, hull + max * rate)
+            game.set_condition("dado example: repairs", game.condition("dado example: repairs") + 1)

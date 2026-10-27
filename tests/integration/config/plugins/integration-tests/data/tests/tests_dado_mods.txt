@@ -1,0 +1,45 @@
+# Copyright (c) 2026 by Anaxarchus
+#
+# Endless Sky is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later version.
+#
+# Endless Sky is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <https://www.gnu.org/licenses/>.
+
+# The Dado mods in this plugin's "dado" folder are built by
+# `modding/tools/dado-mods.sh examples`. In a build without the harness
+# (ES_DADO_MODS off) "dado harness" is 0 and this test only checks that flight works.
+
+test "Dado mods - Hull regen example"
+	status active
+	description "With the Dado mod harness built in, the mods load, a test mod halves the flagship's hull and the example mod repairs it."
+	sequence
+		inject "Three Earthly Barges Save"
+		call "Load First Savegame"
+		call "Depart"
+		apply
+			"test: dado probe" = 1
+			"dado example: enabled" = 1
+			"test: steps to wait" = 200
+		label "flying"
+		# Empty input to make time pass.
+		input
+		apply
+			"test: steps to wait" = "test: steps to wait" - 1
+		branch "flying"
+			"test: steps to wait" > 0
+		branch "no harness"
+			"dado harness" == 0
+		assert
+			and
+				"dado mods loaded" >= 4
+				"test: dado damaged" == 1
+				"dado example: steps" >= 150
+				"dado example: repairs" >= 2
+				"test: dado flagship hull" > "test: dado hull start"
+		label "no harness"

@@ -960,6 +960,13 @@ bool Planet::IsDefending() const
 
 
 
+const vector<const Fleet *> &Planet::DefenseFleets() const
+{
+	return defenseFleets;
+}
+
+
+
 double Planet::DailyTributePenalty() const
 {
 	return dailyTributePenalty;

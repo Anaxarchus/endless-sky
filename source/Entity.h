@@ -133,6 +133,10 @@ public:
 	int TakeDamage(std::vector<Visual> &visuals, const DamageDealt &damage, const Government *hitBy);
 
 
+	// The Dado mod harness sets levels directly, clamped to their capacities.
+	friend class ModHarness;
+
+
 protected:
 	// Cache commonly requested attributes into fields on the Entity-level.
 	virtual void CacheAttributes();

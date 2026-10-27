@@ -1,0 +1,96 @@
+// The harness's C surface: what the game calls. `dadoc --emit=h` writes
+// esmod.h from these. All of them run on the thread that called esmod_init.
+package esmod
+
+import "core:script"
+
+private VM vm
+private Harness harness
+private bool ready = false
+
+// Start the script engine. Answers 0, or a nonzero code when it could not.
+export i32 esmod_init():
+    if ready:
+        return 0
+    try vm = #script_vm(on_error: script.CONTINUE) else:
+        return 1
+    try harness = #script_new(vm, Harness) else:
+        #delete(vm)
+        return 2
+    ready = true
+    return 0
+
+// Load the mod at `<path>.js`, naming it `name` in messages. Answers 0 when it loaded.
+export i32 esmod_load(cstring path, cstring name):
+    if !ready:
+        return 1
+    return i32(harness.load(string8(path), string8(name)))
+
+// How many mods are loaded.
+export i32 esmod_count():
+    if !ready:
+        return 0
+    return i32(harness.count())
+
+// Run every mod's on_step.
+export void esmod_step(i32 step):
+    if ready:
+        harness.step(step)
+
+// Run every mod's on_day for a new day (days since the epoch).
+export void esmod_day(i32 day):
+    if ready:
+        harness.day(day)
+
+// Run every mod's on_enter: the player is now in `system` (its true name).
+export void esmod_enter(cstring system):
+    if ready:
+        harness.enter(string8(system))
+
+// The player clicked the planet button that mod `mod` put up.
+export void esmod_planet_button(cstring mod):
+    if ready:
+        harness.planet_button(string8(mod))
+
+// The player clicked button `button` of the panel mod `mod` opened.
+export void esmod_panel(cstring mod, i32 button):
+    if ready:
+        harness.panel(string8(mod), button)
+
+// Mod API 5: whether mod `mod`'s outfitter button is enabled for `outfit` ("" for none).
+export i32 esmod_can_outfitter(cstring mod, cstring outfit):
+    if !ready:
+        return 0
+    return 1 if harness.can_outfitter(string8(mod), string8(outfit)) else 0
+
+// The player clicked mod `mod`'s outfitter button with `outfit` selected.
+export void esmod_outfitter(cstring mod, cstring outfit):
+    if ready:
+        harness.outfitter(string8(mod), string8(outfit))
+
+// The player confirmed what mod `mod` asked, with its token.
+export void esmod_confirm(cstring mod, i32 token):
+    if ready:
+        harness.confirm(string8(mod), token)
+
+// Mod API 6: the player clicked row `row` of mod `mod`'s panel table.
+export void esmod_panel_row(cstring mod, i32 row):
+    if ready:
+        harness.panel_row(string8(mod), row)
+
+// Mod API 7: the player clicked heading `column` of mod `mod`'s screen table.
+export void esmod_panel_header(cstring mod, i32 column):
+    if ready:
+        harness.panel_header(string8(mod), column)
+
+// The player answered mod `mod`'s number dialog.
+export void esmod_number(cstring mod, i32 token, i32 value):
+    if ready:
+        harness.number(string8(mod), token, value)
+
+export void esmod_shutdown():
+    if !ready:
+        return
+    ready = false
+    #delete(harness)
+    #delete(vm)

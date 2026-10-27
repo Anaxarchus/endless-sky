@@ -1,0 +1,14 @@
+class ThrowsOnStep extends es.Mod
+
+// A test mod: runs on_step until the condition reaches 6, then throws every time.
+// The harness must switch its on_step off after the first throw.
+
+import "imports:sdk/es"
+
+void on_step(es.Game game, int step):
+    if game.condition("dado example: enabled") == 0:
+        return
+    int n = game.condition("test: throws ran")
+    if n >= 6:
+        fail "deliberate failure on step " + string(step)
+    game.set_condition("test: throws ran", n + 1)

@@ -223,6 +223,8 @@ target_sources(EndlessSkyLib PRIVATE
 	MissionTimer.h
 	MissionPanel.cpp
 	MissionPanel.h
+	ModHarness.cpp
+	ModHarness.h
 	Mortgage.cpp
 	Mortgage.h
 	MouseButton.h

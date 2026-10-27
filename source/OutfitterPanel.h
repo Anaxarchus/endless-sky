@@ -88,6 +88,8 @@ private:
 	bool HasLicense(const std::string &name) const;
 	void CheckRefill();
 	void Refill();
+	// The selected ships, the one in focus first, for the mods' outfitter buttons.
+	std::vector<Ship *> ModShips() const;
 	// Shared code for reducing the selected ships to those that have the
 	// same quantity of the selected outfit.
 	const std::vector<Ship *> GetShipsToOutfit(bool isInstall = false) const;

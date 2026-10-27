@@ -305,6 +305,10 @@ public:
 
 	// Access the "condition" flags for this player.
 	ConditionsStore &Conditions();
+	// Text that Dado mods keep with this pilot, by mod and key (mod API 6). An
+	// empty value removes the key. Saved and loaded with the pilot.
+	const std::string &ModData(const std::string &mod, const std::string &key) const;
+	void SetModData(const std::string &mod, const std::string &key, const std::string &value);
 	const ConditionsStore &Conditions() const;
 	// Maps defined names for gifted ships to UUIDs for the ship instances.
 	const std::map<std::string, EsUuid> &GiftedShips() const;
@@ -566,6 +570,8 @@ private:
 
 	ConditionsStore conditions;
 	std::map<std::string, EsUuid> giftedShips;
+	// Dado mods' text, by mod, then key.
+	std::map<std::string, std::map<std::string, std::string>> modData;
 
 	std::set<const System *> seen;
 	std::set<const System *> visitedSystems;

@@ -1,0 +1,105 @@
+class Mod
+
+// The base class of every Endless Sky mod. A mod extends it, overrides the hooks
+// it needs, and is built into one JavaScript file (`npm run build` in the mod
+// SDK, or `modding/tools/dado-mods.sh mod <dir>` in the game's repository):
+//
+//     class ShieldWall extends es.Mod
+//
+//     import "imports:sdk/es"
+//
+//     string name():
+//         return "shield wall"
+//
+//     void on_step(es.Game game, int step):
+//         if every(step, 1.0):
+//             for i in player_ships(game):
+//                 game.set_shields(i, game.shields(i) + 10.0)
+//
+// This class is compiled into each mod, so its helpers cost no call into the
+// game. Hooks run on the game's main thread while the simulation is paused; a
+// hook that throws is reported once and switched off for that mod.
+
+// The mod API this mod was built against; the game refuses a mismatch. Do not override.
+int api_version():
+    return MOD_API
+
+// The mod's name, used by `log`. Override it.
+string name():
+    return "unnamed mod"
+
+// Called once, after the mod loads and before its first step.
+void on_load(Game game):
+    return
+
+// Called every engine step (60 per second) while the player is flying and the game is not paused.
+void on_step(Game game, int step):
+    return
+
+// Called once for each new day (days since the epoch), before on_enter on a
+// jump. Days pass when the player jumps or takes off.
+void on_day(Game game, int day):
+    return
+
+// Called when the player arrives in a system (its true name), and once when
+// the mod starts in flight. Spawn ships the player should find here.
+void on_enter(Game game, string system):
+    return
+
+// Called when the player clicks this mod's planet-screen button (see
+// Game.planet_button). Game.panel_open works here.
+void on_planet_button(Game game):
+    return
+
+// Called when the player clicks a button on this mod's panel.
+void on_panel(Game game, int button):
+    return
+
+// (Mod API 5.) Whether this mod's outfitter button (see Game.outfitter_button)
+// is enabled, for the outfitter's selected `outfit` ("" for none) and ships
+// (Game.outfitter_ship). Runs every frame the outfitter is drawn: keep it quick.
+bool can_outfitter(Game game, string outfit):
+    return true
+
+// (Mod API 5.) Called when the player clicks this mod's outfitter button.
+// Game.confirm works here.
+void on_outfitter(Game game, string outfit):
+    return
+
+// (Mod API 5.) Called when the player clicks OK in a dialog this mod opened
+// with Game.confirm, with the token it gave.
+void on_confirm(Game game, int token):
+    return
+
+// (Mod API 6.) Called when the player clicks a row of this mod's panel table
+// (see Game.panel_columns); `row` is its index, in the order the rows were added.
+void on_panel_row(Game game, int row):
+    return
+
+// (Mod API 7.) Called when the player clicks a column heading of this mod's
+// table on its full screen (Game.screen_open); `column` counts from 0.
+void on_panel_header(Game game, int column):
+    return
+
+// (Mod API 6.) Called when the player answers a Game.ask_number dialog with OK.
+void on_number(Game game, int token, int value):
+    return
+
+// Write a line to the game's log, prefixed with the mod's name.
+void log(Game game, string text):
+    game.log(name() + ": " + text)
+
+// True once every `seconds` of game time, for spreading work out over steps.
+bool every(int step, float seconds):
+    int period = int(seconds * 60.0)
+    if period < 1:
+        return true
+    return step % period == 0
+
+// The indices of the player's ships in the current system that are not disabled.
+[]int player_ships(Game game):
+    []int out = []
+    for i in 0..<game.ship_count():
+        if game.is_player(i) && !game.is_disabled(i):
+            out.append(i)
+    return out

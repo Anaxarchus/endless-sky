@@ -1,0 +1,8 @@
+class NotAMod
+
+// A test mod that does not extend es.Mod. The harness must refuse it.
+
+import "imports:sdk/es"
+
+void on_step(es.Game game, int step):
+    game.set_condition("test: not a mod ran", 1)

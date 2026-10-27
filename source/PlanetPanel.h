@@ -88,6 +88,8 @@ private:
 	std::shared_ptr<Panel> bank;
 	std::shared_ptr<SpaceportPanel> spaceport;
 	std::shared_ptr<Panel> hiring;
+	// The Dado mods' panel (null without the mod harness).
+	std::shared_ptr<Panel> modPanel;
 	std::shared_ptr<Panel> selectedPanel;
 
 	std::shared_ptr<TextArea> description;

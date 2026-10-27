@@ -73,6 +73,8 @@ public:
 	static void Place(const System &system, Ship &ship);
 
 	int64_t Strength() const;
+	// The fleet's variants, with their weights.
+	const WeightedList<Variant> &Variants() const;
 
 
 private:

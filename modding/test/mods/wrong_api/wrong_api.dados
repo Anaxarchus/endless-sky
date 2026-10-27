@@ -1,0 +1,11 @@
+class WrongApi extends es.Mod
+
+// A test mod that claims another mod API version. The harness must refuse it.
+
+import "imports:sdk/es"
+
+int api_version():
+    return 999
+
+void on_step(es.Game game, int step):
+    game.set_condition("test: wrong api ran", 1)

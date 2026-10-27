@@ -1,0 +1,19 @@
+class IngameProbe extends es.Mod
+
+// A test mod for the in-game integration test (tests_dado_mods.txt). Once
+// "test: dado probe" is set it halves the flagship's hull, then records the
+// flagship's hull every step so the test can watch the example mod repair it.
+
+import "imports:sdk/es"
+
+void on_step(es.Game game, int step):
+    if game.condition("test: dado probe") == 0:
+        return
+    int f = game.flagship()
+    if f < 0:
+        return
+    if game.condition("test: dado damaged") == 0:
+        game.set_hull(f, game.max_hull(f) / 2.0)
+        game.set_condition("test: dado damaged", 1)
+        game.set_condition("test: dado hull start", int(game.hull(f)))
+    game.set_condition("test: dado flagship hull", int(game.hull(f)))

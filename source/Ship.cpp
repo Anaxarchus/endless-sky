@@ -499,6 +499,7 @@ void Ship::Load(const DataNode &node, const ConditionsStore *playerConditions)
 	bool hasLeak = false;
 	bool hasFinalExplode = false;
 	bool hasOutfits = false;
+	bool hasIntegrated = false;
 	bool hasDescription = false;
 	bool hasLiveSparks = false;
 	bool hasLiveEffects = false;
@@ -847,6 +848,30 @@ void Ship::Load(const DataNode &node, const ConditionsStore *playerConditions)
 					}
 				}
 		}
+		else if(key == "integrated" && child.Size() >= 3)
+		{
+			// integrated <outfit> <count>
+			//     reduction <sum of (1 - scale)>
+			// (Saves from before space was saved too have the tons saved as a fourth token.)
+			if(!hasIntegrated)
+			{
+				integrated.clear();
+				hasIntegrated = true;
+			}
+			int count = child.Value(2);
+			if(count > 0)
+			{
+				Integration &entry = integrated[GameData::Outfits().Get(child.Token(1))];
+				entry.count += count;
+				if(child.Size() >= 4)
+					entry.legacyMassSaved += max(0., child.Value(3));
+				for(const DataNode &grand : child)
+					if(grand.Token(0) == "reduction" && grand.Size() >= 2)
+						entry.reduction += max(0., grand.Value(1));
+			}
+			else
+				child.PrintTrace("Skipping invalid integrated outfit count:");
+		}
 		else if(key == "cargo")
 			cargo.Load(child);
 		else if(key == "crew" && hasValue)
@@ -1113,6 +1138,32 @@ void Ship::FinishLoading(bool isNewInstance)
 
 		Logger::Log(message, Logger::Level::WARNING);
 	}
+	// Integrated outfits weigh less. Never count more of an outfit as integrated
+	// than are installed.
+	for(auto it = integrated.begin(); it != integrated.end(); )
+	{
+		Integration &entry = it->second;
+		if(entry.legacyMassSaved > 0.)
+		{
+			if(!entry.reduction && it->first->Mass() > 0.)
+				entry.reduction = entry.legacyMassSaved / it->first->Mass();
+			entry.legacyMassSaved = 0.;
+		}
+		entry.reduction = min(entry.reduction, static_cast<double>(entry.count));
+		int installed = OutfitCount(it->first);
+		if(entry.count > installed)
+		{
+			entry.reduction = installed ? entry.reduction * installed / entry.count : 0.;
+			entry.count = installed;
+		}
+		if(entry.count <= 0 || !it->first->IsDefined())
+		{
+			it = integrated.erase(it);
+			continue;
+		}
+		attributes.Add(IntegrationSavings(*it->first, entry.reduction, entry.count));
+		++it;
+	}
 	// Inspect the ship's armament to ensure that guns are in gun ports and
 	// turrets are in turret mounts. This can only happen when the armament
 	// is configured incorrectly in a ship or variant definition. Do not
@@ -1351,6 +1402,21 @@ void Ship::Save(DataWriter &out) const
 				});
 		}
 		out.EndChild();
+
+		// Integrated outfits, by name so the save file is stable.
+		vector<pair<string, const Integration *>> integratedByName;
+		for(const auto &[outfit, entry] : integrated)
+			if(entry.count > 0)
+				integratedByName.emplace_back(outfit->TrueName(), &entry);
+		sort(integratedByName.begin(), integratedByName.end(),
+			[](const auto &a, const auto &b) { return a.first < b.first; });
+		for(const auto &[name, entry] : integratedByName)
+		{
+			out.Write("integrated", name, entry->count);
+			out.BeginChild();
+			out.Write("reduction", entry->reduction);
+			out.EndChild();
+		}
 
 		cargo.Save(out);
 		out.Write("crew", crew);
@@ -4076,6 +4142,9 @@ void Ship::JettisonInstalled(const Outfit *outfit, int count, bool wasAppeasing)
 {
 	if(count < 0 || !outfit->Get("can jettison"))
 		return;
+	count = min(count, RemovableCount(outfit));
+	if(!count)
+		return;
 
 	AddOutfit(outfit, -count);
 	JettisonOutfit(outfit, count, wasAppeasing);
@@ -4132,6 +4201,27 @@ int Ship::AddOutfit(const Outfit *outfit, int count)
 	}
 	bool haveAfter = outfits.contains(outfit);
 	attributes.Add(*outfit, count);
+	// Callers are expected not to remove integrated outfits (see RemovableCount).
+	// If one does, those outfits stop being integrated and weigh what they did.
+	if(count < 0)
+	{
+		auto iit = integrated.find(outfit);
+		if(iit != integrated.end())
+		{
+			Integration &entry = iit->second;
+			int installed = OutfitCount(outfit);
+			if(entry.count > installed)
+			{
+				int lost = entry.count - installed;
+				double restored = entry.reduction * lost / entry.count;
+				attributes.Add(IntegrationSavings(*outfit, restored, lost), -1);
+				entry.reduction -= restored;
+				entry.count = installed;
+				if(entry.count <= 0)
+					integrated.erase(iit);
+			}
+		}
+	}
 	// Update the attribute caches.
 	CacheAttributes();
 	if(outfit->GetWeapon())
@@ -4170,6 +4260,63 @@ int Ship::AddOutfit(const Outfit *outfit, int count)
 	else if(outfit->Get("jump speed") || outfit->Get("scram drive"))
 		navigation.RecalibrateJumpSpeed(*this);
 	return count;
+}
+
+
+
+int Ship::IntegratedCount(const Outfit *outfit) const
+{
+	auto it = integrated.find(outfit);
+	return it == integrated.end() ? 0 : it->second.count;
+}
+
+
+
+int Ship::RemovableCount(const Outfit *outfit) const
+{
+	return max(0, OutfitCount(outfit) - IntegratedCount(outfit));
+}
+
+
+
+bool Ship::Integrate(const Outfit *outfit, double scale)
+{
+	if(!outfit || !outfit->IsDefined() || RemovableCount(outfit) <= 0 || !(scale >= 0. && scale <= 1.))
+		return false;
+	// Ammunition is used up and refilled, so its count is not fixed.
+	if(outfit->Category() == "Ammunition")
+		return false;
+	for(const auto &installed : outfits)
+		if(installed.first->AmmoStoredOrUsed().contains(outfit))
+			return false;
+
+	Integration &entry = integrated[outfit];
+	++entry.count;
+	entry.reduction += 1. - scale;
+	const Outfit savings = IntegrationSavings(*outfit, 1. - scale, 1);
+	attributes.Add(savings);
+	CacheAttributes();
+	if((isYours || isSpecial) && landingPlanet && navigation.HasJumpMassCost())
+		navigation.Recalibrate(*this);
+	return true;
+}
+
+
+
+Outfit Ship::IntegrationSavings(const Outfit &outfit, double reduction, int count)
+{
+	Outfit savings;
+	if(count <= 0 || reduction <= 0.)
+		return savings;
+	// Each outfit saves a whole number of tons and of outfit space (rounding a
+	// half up). Capacities (weapon, engine, cargo) are left as they are.
+	const double share = reduction / count;
+	if(outfit.Mass() > 0.)
+		savings.AddMass(-round(outfit.Mass() * share) * count);
+	double used = outfit.Get("outfit space");
+	if(used < 0.)
+		savings.Set("outfit space", round(-used * share) * count);
+	return savings;
 }
 
 

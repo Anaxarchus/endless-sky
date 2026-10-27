@@ -43,6 +43,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "Messages.h"
 #include "Minable.h"
 #include "Mission.h"
+#include "ModHarness.h"
 #include "NPC.h"
 #include "shader/OutlineShader.h"
 #include "Person.h"
@@ -265,6 +266,8 @@ Engine::~Engine()
 void Engine::Place()
 {
 	ships.clear();
+	// Ships the Dado mods spawned are gone with the rest.
+	ModHarness::ShipsReplaced();
 	ai.ClearOrders();
 
 	player.SetSystemEntry(SystemEntry::TAKE_OFF);
@@ -468,6 +471,10 @@ void Engine::Step(bool isActive)
 				SpriteLoadManager::LoadDeferred(asyncQueue, object.GetSprite());
 
 	// The calculation thread was paused by MainPanel before calling this function, so it is safe to access things.
+	// Run the Dado mods' step hooks now, on the main thread, while the world holds still.
+	if(isActive && !timePaused)
+		ModHarness::Step(player, ships, newShips, events, step);
+
 	const shared_ptr<Ship> flagship = player.FlagshipPtr();
 	const StellarObject *object = player.GetStellarObject();
 	if(object)

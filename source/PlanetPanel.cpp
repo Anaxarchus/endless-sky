@@ -20,10 +20,12 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "text/Alignment.h"
 #include "audio/Audio.h"
 #include "BankPanel.h"
+#include "Color.h"
 #include "Command.h"
 #include "Conversation.h"
 #include "ConversationPanel.h"
 #include "DialogPanel.h"
+#include "text/Font.h"
 #include "text/FontSet.h"
 #include "text/Format.h"
 #include "GameData.h"
@@ -33,18 +35,22 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "MapDetailPanel.h"
 #include "MessageLogPanel.h"
 #include "MissionPanel.h"
+#include "ModHarness.h"
 #include "OutfitterPanel.h"
 #include "Planet.h"
 #include "PlayerInfo.h"
 #include "PlayerInfoPanel.h"
 #include "Port.h"
 #include "Preferences.h"
+#include "Rectangle.h"
 #include "Screen.h"
 #include "Ship.h"
 #include "ShipyardPanel.h"
 #include "Shop.h"
 #include "SpaceportPanel.h"
 #include "image/SpriteLoadManager.h"
+#include "image/SpriteSet.h"
+#include "shader/SpriteShader.h"
 #include "System.h"
 #include "TaskQueue.h"
 #include "TextArea.h"
@@ -67,6 +73,7 @@ PlanetPanel::PlanetPanel(PlayerInfo &player, function<void()> callback)
 	bank = make_shared<BankPanel>(player);
 	spaceport = make_shared<SpaceportPanel>(player);
 	hiring = make_shared<HiringPanel>(player);
+	modPanel = ModHarness::NewPlanetPanel(player);
 
 	description = make_shared<TextArea>();
 	description->SetFont(FontSet::Get(Preferences::GetFontSize()));
@@ -82,6 +89,9 @@ PlanetPanel::PlanetPanel(PlayerInfo &player, function<void()> callback)
 	queue.ProcessSyncTasks();
 
 	Audio::Pause();
+
+	// Let the Dado mods know where the player is, so they can offer a planet button.
+	ModHarness::Landed(player);
 }
 
 
@@ -105,6 +115,21 @@ void PlanetPanel::Step()
 			GetUI().Pop(selectedPanel.get());
 		GetUI().Pop(this);
 		return;
+	}
+
+	// A mod closed its panel (or never opened one): show the planet again.
+	if(modPanel && selectedPanel == modPanel && !ModHarness::PanelOpen())
+	{
+		GetUI().Pop(modPanel.get());
+		selectedPanel = nullptr;
+		AddChild(description);
+	}
+	// A mod opened its panel when the player landed: show it, unless the player is busy elsewhere.
+	else if(modPanel && !selectedPanel && ModHarness::PanelOpen() && GetUI().IsTop(this))
+	{
+		selectedPanel = modPanel;
+		GetUI().Push(modPanel);
+		RemoveChild(description.get());
 	}
 
 	// If the previous mission callback resulted in a "launch", take off now.
@@ -237,6 +262,19 @@ void PlanetPanel::Draw()
 	const Interface *ui = GameData::Interfaces().Get(Screen::Width() < 1280 ? "planet (small screen)" : "planet");
 	ui->Draw(info, this);
 
+	// A button for the Dado mods, in the free slot above "Depart".
+	string modLabel = ModHarness::PlanetButtonLabel();
+	if(!modLabel.empty())
+	{
+		Point center(Screen::Width() < 1280 ? 280. : 340., 255.);
+		SpriteShader::Draw(SpriteSet::Get("ui/planet dialog button"), center);
+		Rectangle box(center, Point(140., 40.));
+		const Font &font = FontSet::Get(18);
+		const Color &color = *GameData::Colors().Get(box.Contains(UI::GetMouse()) ? "hover" : "active");
+		font.Draw(modLabel, Point(box.Right() - 10. - font.Width(modLabel), center.Y() - .5 * font.Height()), color);
+		AddZone(box, 'k');
+	}
+
 	// The description text needs to be updated because player conditions can be changed
 	// after the panel's creation, such as the player accepting a mission on the Job Board.
 	if(!selectedPanel)
@@ -280,6 +318,17 @@ bool PlanetPanel::KeyDown(SDL_Keycode key, Uint16 mod, const Command &command, b
 		UI::PlaySound(UI::UISound::NORMAL);
 		GetUI().Push(new PlayerInfoPanel(player));
 		return true;
+	}
+	else if(key == 'k' && !ModHarness::PlanetButtonLabel().empty())
+	{
+		// The mod's panel takes the content area, as the bank and trading panels do.
+		ModHarness::PlanetButton(player, GetUI());
+		if(!modPanel || !ModHarness::PanelOpen())
+		{
+			UI::PlaySound(UI::UISound::NORMAL);
+			return true;
+		}
+		selectedPanel = modPanel;
 	}
 	else if(key == 'd' && flagship && flagship->CanBeFlagship())
 	{
@@ -328,6 +377,9 @@ bool PlanetPanel::KeyDown(SDL_Keycode key, Uint16 mod, const Command &command, b
 	// planet UI panel. So, we need to push the new and pop the old selected panel:
 	if(oldPanel != selectedPanel.get())
 	{
+		// Leaving a mod's panel closes it.
+		if(oldPanel && oldPanel == modPanel.get())
+			ModHarness::ClosePanel();
 		if(oldPanel)
 			GetUI().Pop(oldPanel);
 		if(selectedPanel)
@@ -359,7 +411,8 @@ void PlanetPanel::TakeOffIfReady()
 {
 	// If we're currently showing a conversation or dialog, wait for it to close.
 	if(!GetUI().IsTop(this) && !GetUI().IsTop(trading.get()) && !GetUI().IsTop(bank.get())
-			&& !GetUI().IsTop(spaceport.get()) && !GetUI().IsTop(hiring.get()))
+			&& !GetUI().IsTop(spaceport.get()) && !GetUI().IsTop(hiring.get())
+			&& !(modPanel && GetUI().IsTop(modPanel.get())))
 		return;
 
 	// If something happens here that cancels the order to take off, don't try

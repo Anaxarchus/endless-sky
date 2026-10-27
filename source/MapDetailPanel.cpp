@@ -32,6 +32,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "text/Layout.h"
 #include "MapOutfitterPanel.h"
 #include "MapShipyardPanel.h"
+#include "ModHarness.h"
 #include "Planet.h"
 #include "PlayerInfo.h"
 #include "shader/PointerShader.h"
@@ -146,6 +147,9 @@ void MapDetailPanel::Draw()
 	DrawOrbits();
 	DrawInfo();
 	DrawKey();
+	// The Dado mods' notes on the selected system, below the map key.
+	if(!isSimplified)
+		ModHarness::DrawMapDetails(selectedSystem, Screen::Top() + SpriteSet::Get("ui/orbits and key")->Height());
 	FinishDrawing(isStars ? "is stars" : "is ports");
 }
 

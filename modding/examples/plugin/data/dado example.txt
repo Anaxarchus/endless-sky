@@ -1,0 +1,24 @@
+# Copyright (c) 2026 by Anaxarchus
+#
+# Endless Sky is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later version.
+#
+# Endless Sky is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <https://www.gnu.org/licenses/>.
+
+# Part of the "Dado Example" plugin, which `dado-mods.sh plugin` assembles:
+# the first time the player lands anywhere, switch the example mods on. A data
+# file setting a condition that a mod reads is how missions and mods talk.
+
+mission "Dado Example: Enable"
+	landing
+	invisible
+	non-blocking
+	on offer
+		set "dado example: enabled"
+		fail

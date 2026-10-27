@@ -524,6 +524,19 @@ public:
 	// Add or remove outfits. (To remove, pass a negative number.)
 	// Guards against removing more outfits than the ship has. Returns the number actually added or removed.
 	int AddOutfit(const Outfit *outfit, int count);
+	// Integrated outfits are installed for good: they cannot be uninstalled,
+	// sold, moved to cargo or storage, or plundered, and the ship carries them
+	// lighter. (Mods integrate outfits through the Dado harness.) How many of this
+	// outfit are integrated, and how many of the installed ones are not.
+	int IntegratedCount(const Outfit *outfit) const;
+	int RemovableCount(const Outfit *outfit) const;
+	// Integrate one installed, not yet integrated outfit. Its mass and the
+	// outfit space it takes up are scaled by `scale` (0 to 1). The weapon or
+	// engine capacity, cargo space, and gun port or turret mount it takes stay
+	// as they are. Ammunition, and outfits that some installed outfit
+	// stores or uses as ammunition, cannot be integrated: their counts change in
+	// flight. Returns whether it was integrated.
+	bool Integrate(const Outfit *outfit, double scale);
 
 	// Get the list of weapons.
 	Armament &GetArmament();
@@ -791,6 +804,19 @@ private:
 	bool addAttributes = false;
 	const Weapon *explosionWeapon = nullptr;
 	std::map<const Outfit *, int> outfits;
+	// Integrated outfits: how many of each, and how much of one outfit's mass
+	// and space they save in all (the sum of 1 - scale over them).
+	struct Integration {
+		int count = 0;
+		double reduction = 0.;
+		// From a save written before space was saved too: the tons saved.
+		double legacyMassSaved = 0.;
+	};
+	// What `count` integrated outfits with this `reduction` in all save: less
+	// mass, and outfit space given back. Each outfit's savings are whole numbers, as
+	// the game's masses and spaces are.
+	static Outfit IntegrationSavings(const Outfit &outfit, double reduction, int count);
+	std::map<const Outfit *, Integration> integrated;
 	CargoHold cargo;
 	std::list<std::shared_ptr<Flotsam>> jettisoned;
 	std::list<std::pair<std::shared_ptr<Flotsam>, size_t>> jettisonedFromBay;

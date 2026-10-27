@@ -71,9 +71,11 @@ BoardingPanel::BoardingPanel(PlayerInfo &player, const shared_ptr<Ship> &victim)
 	// You cannot plunder hand to hand weapons, because they are kept in the
 	// crew's quarters, not mounted on the exterior of the ship. Certain other
 	// outfits are also unplunderable, like outfits expansions.
-	auto AddPlunder = [this](const map<const Outfit *, int> &outfits, bool inCargo) -> void {
-		for(auto &[outfit, count] : outfits)
+	auto AddPlunder = [this, &victim](const map<const Outfit *, int> &outfits, bool inCargo) -> void {
+		for(auto &[outfit, installed] : outfits)
 		{
+			// Integrated outfits are part of the hull, and cannot be taken.
+			int count = inCargo ? installed : victim->RemovableCount(outfit);
 			// Don't include outfits that are installed and unplunderable. But,
 			// "unplunderable" outfits can still be stolen from cargo.
 			if(!count || (!inCargo && outfit->GetPrecise("unplunderable")))

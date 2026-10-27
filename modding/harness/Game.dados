@@ -1,0 +1,392 @@
+class Game
+
+// Which mod the harness is running a hook of; it routes map, planet-button and
+// panel calls to that mod. Package-private: mods cannot see or set it.
+private string caller = ""
+
+// The game, as a mod sees it. A mod is handed one `Game` in every hook and
+// reaches the game only through it. `dadoc --emit=script-api` writes this
+// class's signatures into the SDK (modding/sdk/es/game.dado) that mods compile against.
+
+// Write a line to the game's log.
+void log(string text):
+    host_log(text)
+
+// Show a message to the player.
+void message(string text):
+    host_message(text)
+
+// The engine's step counter: 60 steps per second of game time.
+int step():
+    return host_step()
+
+// The name of the system the player is in.
+string system():
+    return host_system_name()
+
+// Ships in the current system, indexed 0 ..< ship_count() for this hook only.
+int ship_count():
+    return host_ship_count()
+
+// The player's flagship's index, or -1.
+int flagship():
+    return host_flagship()
+
+// Ship i's name.
+string ship_name(int i):
+    return host_ship_name(i)
+
+// Ship i's model (its hull's name, e.g. "Sparrow").
+string ship_model(int i):
+    return host_ship_model(i)
+
+// Whether ship i is the player's.
+bool is_player(int i):
+    return host_ship_is_player(i)
+
+// Whether ship i is disabled.
+bool is_disabled(int i):
+    return host_ship_is_disabled(i)
+
+// Ship i's hull points.
+float hull(int i):
+    return host_ship_hull(i)
+
+// Ship i's maximum hull points.
+float max_hull(int i):
+    return host_ship_max_hull(i)
+
+// Ship i's shield points.
+float shields(int i):
+    return host_ship_shields(i)
+
+// Ship i's maximum shield points.
+float max_shields(int i):
+    return host_ship_max_shields(i)
+
+// Ship i's energy, 0..1 of its capacity.
+float energy(int i):
+    return host_ship_energy(i)
+
+// Ship i's fuel, 0..1 of its capacity.
+float fuel(int i):
+    return host_ship_fuel(i)
+
+// Set a level; the game clamps it to [0, max].
+void set_hull(int i, float value):
+    host_ship_set_hull(i, value)
+
+// Set ship i's shields; the game clamps them to [0, max].
+void set_shields(int i, float value):
+    host_ship_set_shields(i, value)
+
+// The player's conditions, shared with missions and events.
+int condition(string name):
+    return host_condition(name)
+
+// Set one of the player's conditions; it is saved with the pilot.
+void set_condition(string name, int value):
+    host_set_condition(name, value)
+
+// ---- Mod API 2 ----
+
+// The date, as days since the game's epoch.
+int day():
+    return host_day()
+
+// The true (data) name of the system the player is in, or "".
+string here():
+    return host_here()
+
+// The galaxy: every valid, accessible system, sorted by true name.
+int system_count():
+    return host_system_count()
+
+// The true name of system i, 0 ..< system_count().
+string system_at(int i):
+    return host_system_at(i)
+
+// The government a system belongs to, by name ("" for none).
+string system_government(string system):
+    return host_system_government(system)
+
+// The systems linked to this one by hyperspace lanes.
+int link_count(string system):
+    return host_system_link_count(system)
+
+// The system's k-th linked system, 0 ..< link_count(system).
+string link(string system, int k):
+    return host_system_link(system, k)
+
+// Whether any planet in the system is inhabited.
+bool inhabited(string system):
+    return host_system_inhabited(system)
+
+// The defense fleets of the system's planets: what a player fights to dominate them.
+int defense_count(string system):
+    return host_system_defense_count(system)
+
+// The k-th defense fleet's name, 0 ..< defense_count(system).
+string defense_fleet(string system, int k):
+    return host_system_defense_fleet(system, k)
+
+// Apply data changes as an event body, as a plugin's event would; they are
+// saved with the pilot. Besides data changes, the body may hold what any event
+// may: `visit "<system>"` and `visit planet "<planet>"` lines (and their
+// `unvisit` forms) and condition assignments. Answers false for an empty body.
+// For example:
+//     game.change("system \"Alpha Centauri\"\n\tgovernment \"Free Worlds\"")
+bool change(string text):
+    return host_change(text)
+
+// Government `government`'s attitude toward `toward` (below 0 is hostile).
+float attitude(string government, string toward):
+    return host_attitude(government, toward)
+
+// The player's reputation with a government (below 0 is hostile).
+float reputation(string government):
+    return host_reputation(government)
+
+// Set the player's reputation with a government.
+void set_reputation(string government, float value):
+    host_set_reputation(government, value)
+
+// Whether a plugin with this name is installed and enabled. A mod can ship a
+// companion plugin as a switch the player flips in the game's plugin list.
+bool plugin_enabled(string name):
+    return host_plugin_enabled(name)
+
+// A fleet definition's average strength: the sum of its ships' costs.
+float fleet_strength(string fleet):
+    return host_fleet_strength(fleet)
+
+// ---- Mod API 3 ----
+
+// A fleet definition's expected stats, averaged over its variants by weight.
+// "ships" (how many), "hull", "shields", "dps" (the shield plus hull damage its
+// weapons deal per second) and "cost" are totals for the fleet; "speed" is the
+// average top speed of its ships. 0 for an unknown fleet or stat.
+float fleet_stat(string fleet, string stat):
+    return host_fleet_stat(fleet, stat)
+
+// How many fleets arrive in the system on their own (its `fleet` lines).
+int system_fleet_count(string system):
+    return host_system_fleet_count(system)
+
+// The k-th of those fleets' names, 0 ..< system_fleet_count(system).
+string system_fleet(string system, int k):
+    return host_system_fleet(system, k)
+
+// In flight only: add a fleet to the player's system under `government`, its
+// ships tagged `tag`. With `arrive` they jump in; otherwise they are already
+// there. Answers how many ships were added. Ships spawned now are in
+// ship_count() from the next step.
+int spawn(string fleet, string government, string tag, bool arrive):
+    return host_spawn(fleet, government, tag, arrive)
+
+// The tag a spawned ship carries, or "".
+string ship_tag(int i):
+    return host_ship_tag(i)
+
+// The name of ship i's government.
+string ship_government(int i):
+    return host_ship_government(i)
+
+// Ship i's strength: its cost, the measure fleet_strength uses.
+float ship_strength(int i):
+    return host_ship_strength(i)
+
+// The strength of the ships in the system with this tag that can still fight.
+float tag_strength(string tag):
+    return host_tag_strength(tag)
+
+// How many ships whose tag starts with `prefix` the player has disabled or
+// destroyed since the last call with this prefix.
+int player_kills(string prefix):
+    return host_player_kills(prefix)
+
+// Map overlays, drawn on every map view until cleared. Colours are 0..1.
+void map_clear():
+    host_map_clear(caller)
+
+// Draw a line between two systems on the map.
+void map_line(string from, string to, float r, float g, float b):
+    host_map_line(caller, from, to, r, g, b)
+
+// Draw a ring around a system on the map, with a label beside it ("" for none).
+void map_marker(string system, float r, float g, float b, string label):
+    host_map_marker(caller, system, r, g, b, label)
+
+// (Mod API 4.) Add a section to the map's side panel, shown below the map key
+// while the player has this system selected: a heading in the given colour,
+// then the text ("\n" starts a new line; long lines wrap). Keep markers short
+// and put the details here. map_clear() removes them with the rest.
+void map_detail(string system, string title, string text, float r, float g, float b):
+    host_map_detail(caller, system, title, text, r, g, b)
+
+// The planet screen shows a button with this label ("" removes it); clicking
+// it runs this mod's on_planet_button.
+void planet_button(string label):
+    host_planet_button(caller, label)
+
+// A panel with a title and text; add buttons with panel_button. Clicking one
+// runs this mod's on_panel with the button's index. Opening a panel while one
+// is open replaces it. Only from on_planet_button or on_panel, or from on_enter
+// when the player lands (the planet screen then shows it at once). The planet
+// screen shows the panel in its content area, as it shows the bank and trading.
+void panel_open(string title, string text):
+    host_panel_open(caller, title, text)
+
+// Add a button to the open panel; buttons are numbered from 0 in the order added.
+void panel_button(string label):
+    host_panel_button(caller, label)
+
+// Close this mod's panel.
+void panel_close():
+    host_panel_close(caller)
+
+
+// (Mod API 5.) The outfitter shows a button with this label ("" removes it).
+// It is enabled while this mod's can_outfitter says so, and clicking it runs
+// this mod's on_outfitter.
+void outfitter_button(string label):
+    host_outfitter_button(caller, label)
+
+// (Mod API 5.) In can_outfitter, on_outfitter and the on_confirm they lead to:
+// how many ships are selected in the outfitter.
+int outfitter_ship_count():
+    return host_outfitter_ship_count()
+
+// (Mod API 5.) The k-th selected ship's UUID, 0 ..< outfitter_ship_count(); 0
+// is the ship in focus.
+string outfitter_ship(int k):
+    return host_outfitter_ship(k)
+
+// (Mod API 5.) How many ships the player has (not destroyed), wherever they are.
+int fleet_count():
+    return host_fleet_count()
+
+// (Mod API 5.) The k-th of the player's ships, as a UUID, 0 ..< fleet_count().
+// A ship's UUID lasts across saving and loading; the methods below take it.
+string fleet_ship(int k):
+    return host_fleet_ship(k)
+
+// (Mod API 5.) The name the player gave one of their ships ("" if unknown).
+string fleet_ship_name(string ship):
+    return host_fleet_ship_name(ship)
+
+// (Mod API 5.) One of the player's ships' model, e.g. "Sparrow".
+string fleet_ship_model(string ship):
+    return host_fleet_ship_model(ship)
+
+// (Mod API 5.) How many of an outfit (by its true name) a ship has installed.
+int ship_outfit_count(string ship, string outfit):
+    return host_ship_outfit_count(ship, outfit)
+
+// (Mod API 5.) How many of a ship's installed outfits of this kind are integrated.
+int ship_integrated_count(string ship, string outfit):
+    return host_ship_integrated_count(ship, outfit)
+
+// (Mod API 5.) Integrate one installed outfit that is not yet integrated: it
+// stays installed (a weapon keeps its gun port or turret mount) but can no
+// longer be uninstalled, sold, moved or plundered, and its mass and the outfit
+// space it takes up are scaled by `scale` (0..1), each saving rounded to a
+// whole number (a half up), as the game's masses and spaces are. Weapon and
+// engine capacity and cargo space are left as they are. Saved with the ship. Ammunition, and outfits other
+// outfits store or fire as ammunition, cannot be integrated. Answers whether it was.
+bool ship_integrate(string ship, string outfit, float scale):
+    return host_ship_integrate(ship, outfit, scale)
+
+// (Mod API 5.) An outfit's display name, or "" for an unknown outfit.
+string outfit_name(string outfit):
+    return host_outfit_name(outfit)
+
+// (Mod API 5.) An outfit's category, e.g. "Guns", "Systems", "Ammunition".
+string outfit_category(string outfit):
+    return host_outfit_category(outfit)
+
+// (Mod API 5.) An outfit's attribute, as in its data ("outfit space", "cargo
+// space", ...); "mass" and "cost" answer its mass and cost. 0 when it has none.
+float outfit_attribute(string outfit, string attribute):
+    return host_outfit_attribute(outfit, attribute)
+
+// (Mod API 5.) Whether an outfit is a weapon (it goes in a gun port or turret mount).
+bool outfit_is_weapon(string outfit):
+    return host_outfit_is_weapon(outfit)
+
+// (Mod API 5.) Ask the player to confirm, with OK and Cancel (the default).
+// OK runs this mod's on_confirm with `token`; Cancel runs nothing. Only from a
+// hook the player started: on_planet_button, on_panel, on_outfitter, on_confirm.
+void confirm(string text, int token):
+    host_confirm(caller, text, token)
+
+// (Mod API 6.) Text this mod keeps with the pilot under `key`, or "" if none.
+// Saved and loaded with the pilot, apart from the conditions missions share:
+// the place for a mod's own state, such as JSON. Other mods' keys are separate.
+string data(string key):
+    return host_data(caller, key)
+
+// (Mod API 6.) Keep `text` with the pilot under `key` ("" removes it). Up to 4 MB.
+void set_data(string key, string text):
+    host_set_data(caller, key, text)
+
+// (Mod API 6.) The true name of the planet the player is landed on, or "".
+string planet():
+    return host_planet()
+
+// (Mod API 6.) A planet's display name, or "" for an unknown planet.
+string planet_name(string planet):
+    return host_planet_name(planet)
+
+// (Mod API 6.) The true name of the system a planet is in.
+string planet_system(string planet):
+    return host_planet_system(planet)
+
+// (Mod API 6.) The government a planet belongs to, by name.
+string planet_government(string planet):
+    return host_planet_government(planet)
+
+// (Mod API 6.) How many planets a system has.
+int planet_count(string system):
+    return host_planet_count(system)
+
+// (Mod API 6.) The system's k-th planet's true name, 0 ..< planet_count(system).
+string planet_at(string system, int k):
+    return host_planet_at(system, k)
+
+// (Mod API 6.) Whether the player may use a service on a planet now: "bank",
+// "trading", "job board", "hire crew", "outfitter" or "shipyard". True when the
+// planet has it and the player has access, as the planet screen decides.
+bool planet_service(string planet, string service):
+    return host_planet_service(planet, service)
+
+// (Mod API 6.) Give the open panel a table under its text, with these column
+// headings separated by tabs ("Company\tPrice\tChange"). Rows follow with
+// panel_row. The first column is aligned left, the others right.
+void panel_columns(string headers):
+    host_panel_columns(caller, headers)
+
+// (Mod API 6.) Add a row to the open panel's table, cells separated by tabs.
+// Rows are numbered from 0; clicking one runs this mod's on_panel_row.
+void panel_row(string cells):
+    host_panel_row(caller, cells)
+
+// (Mod API 6.) Ask the player for a whole number from 1 to `most`. OK runs this
+// mod's on_number with `token` and the number. Only from a hook the player started.
+void ask_number(string text, int token, int most):
+    host_ask_number(caller, text, token, most)
+
+// (Mod API 7.) Open this mod's panel on a full screen of its own, over the
+// planet screen, as the outfitter and shipyard are: the title and the table
+// (panel_columns, panel_row) fill the left, and a sidebar on the right holds
+// the text and the buttons (panel_button). Clicking a column heading runs this
+// mod's on_panel_header; the arrow keys step through the rows as clicks would.
+// Only from a hook the player started, or to refresh this mod's open screen;
+// panel_close, or Escape, closes it. panel_open goes back to the planet screen.
+void screen_open(string title, string text):
+    host_screen_open(caller, title, text)
+
+// (Mod API 7.) Show row `row` of the open panel's table as chosen (-1 for
+// none); on a screen, the table scrolls to show it.
+void panel_select(int row):
+    host_panel_select(caller, row)

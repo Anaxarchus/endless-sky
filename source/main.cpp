@@ -34,6 +34,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "Logger.h"
 #include "MainPanel.h"
 #include "MenuPanel.h"
+#include "ModHarness.h"
 #include "Panel.h"
 #include "PilotProfile.h"
 #include "PlayerInfo.h"
@@ -264,6 +265,8 @@ int main(int argc, char *argv[])
 		CustomEvents::Init();
 		// This is the main loop where all the action begins.
 		GameLoop(player, queue, conversation, testToRunName, debugMode);
+		// End the mods while the game state they were handed still exists.
+		ModHarness::Shutdown();
 	}
 	catch(Test::known_failure_tag)
 	{

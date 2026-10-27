@@ -88,7 +88,8 @@ namespace {
 		while(count)
 		{
 			int moved = (count > 0) ? 1 : -1;
-			if((moved < 0 && !flagship->OutfitCount(outfit)) || !flagship->Attributes().CanAdd(*outfit, moved))
+			// Integrated outfits are installed for good.
+			if((moved < 0 && !flagship->RemovableCount(outfit)) || !flagship->Attributes().CanAdd(*outfit, moved))
 				break;
 			flagship->AddOutfit(outfit, moved);
 			didShip = true;

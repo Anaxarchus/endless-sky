@@ -1,0 +1,11 @@
+name "Dado Example"
+version "1"
+authors
+	"Anaxarchus"
+tags
+	"example"
+	"scripting"
+about "An example of a mod written in DadoScript and run by the game's Dado mod harness. It needs a build of the game with Dado mods turned on; in any other build the mod is ignored and only this plugin's mission loads."
+about "Hull regeneration: while you fly, each of your ships that is not disabled repairs 2% of its maximum hull every second."
+about `The mod stays idle until the condition "dado example: enabled" is set. This plugin's invisible mission sets it the first time you land, which shows how missions and mods talk: through the player's conditions. While it runs, the mod counts its steps in "dado example: steps" and its repairs in "dado example: repairs".`
+about "Its source is the hull regen example in the modding/examples folder of the game's repository."

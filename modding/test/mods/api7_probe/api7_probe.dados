@@ -1,0 +1,25 @@
+class Api7Probe extends es.Mod
+
+// A test mod for mod API 7: the full screen, a chosen row and heading clicks.
+// It records what it saw in conditions named "test: api7 ...", which
+// test/fake_game.cpp checks, and does nothing unless "test: api7" is set.
+
+import "imports:sdk/es"
+
+string name():
+    return "api7 probe"
+
+void on_planet_button(es.Game game):
+    if game.condition("test: api7") == 0:
+        return
+    game.screen_open("Board", "Side text")
+    game.panel_columns("Name\tValue")
+    game.panel_row("Alpha\t1")
+    game.panel_row("Beta\t2")
+    game.panel_select(1)
+    game.panel_button("Leave")
+
+void on_panel_header(es.Game game, int column):
+    if game.condition("test: api7") == 0:
+        return
+    game.set_condition("test: api7 header", column + 1)

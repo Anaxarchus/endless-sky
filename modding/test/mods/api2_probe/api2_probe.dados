@@ -1,0 +1,187 @@
+class Api2Probe extends es.Mod
+
+// A test mod for mod API 2: calls every Game method API 2 added and records
+// what it saw in conditions, which test/fake_game.cpp checks. It does nothing
+// at all unless the condition "test: api2" is non-zero, because the test mods
+// are also copied into the real game's integration-test plugin.
+//
+// fake_game drives it in phases through "test: api2 phase": each on_step runs
+// the phase it names once and marks it done in "test: api2 phase done".
+// Strings it reads are recorded in condition names ("test: api2 here Alpha").
+
+import "imports:sdk/es"
+
+int panel_clicks = 0
+
+string name():
+    return "api2 probe"
+
+bool enabled(es.Game game):
+    return game.condition("test: api2") != 0
+
+void rec(es.Game game, string key, int value):
+    game.set_condition("test: api2 " + key, value)
+
+void flag(es.Game game, string key, bool ok):
+    rec(game, key, 1 if ok else 0)
+
+// One system as "name:government:inhabited:link,link:fleet,fleet".
+string describe(es.Game game, string system):
+    string out = system + ":" + game.system_government(system) + ":"
+    out = out + ("1" if game.inhabited(system) else "0") + ":"
+    for k in 0..<game.link_count(system):
+        if k > 0:
+            out = out + ","
+        out = out + game.link(system, k)
+    out = out + ":"
+    for k in 0..<game.defense_count(system):
+        if k > 0:
+            out = out + ","
+        out = out + game.defense_fleet(system, k)
+    return out
+
+void on_step(es.Game game, int step):
+    if !enabled(game):
+        return
+    int phase = game.condition("test: api2 phase")
+    if phase == 0 || phase == game.condition("test: api2 phase done"):
+        return
+    rec(game, "phase done", phase)
+    if phase == 1:
+        galaxy(game)
+        governments(game)
+        changes(game)
+        spawning(game)
+        overlays(game)
+    else if phase == 2:
+        inspect(game)
+    else if phase == 3:
+        kills(game)
+
+// Phase 1: the galaxy, as read-only queries.
+void galaxy(es.Game game):
+    rec(game, "day", game.day())
+    rec(game, "here " + game.here(), 1)
+    rec(game, "display " + game.system(), 1)
+    int n = game.system_count()
+    rec(game, "system count", n)
+    string all = ""
+    for i in 0..<n:
+        all = all + describe(game, game.system_at(i)) + ";"
+    rec(game, "galaxy " + all, 1)
+    flag(game, "out of range", game.system_at(-1) == "" && game.system_at(n) == ""
+        && game.link("Alpha", 99) == "" && game.link("Alpha", -1) == ""
+        && game.defense_fleet("Alpha", 5) == "" && game.system_government("Nowhere") == ""
+        && game.link_count("Nowhere") == 0 && !game.inhabited("Nowhere"))
+
+// Phase 1: attitudes, reputations and fleet strengths.
+void governments(es.Game game):
+    rec(game, "attitude pirate republic", int(game.attitude("Pirate", "Republic") * 100.0))
+    rec(game, "reputation republic", int(game.reputation("Republic") * 100.0))
+    game.set_reputation("Pirate", 12.5)
+    rec(game, "reputation pirate", int(game.reputation("Pirate") * 100.0))
+    rec(game, "strength raid", int(game.fleet_strength("Pirate Raid")))
+    rec(game, "strength none", int(game.fleet_strength("No Such Fleet")))
+    // Mod API 3.
+    for stat in ["ships", "hull", "shields", "dps", "speed", "cost", "bogus"]:
+        rec(game, "stat raid " + stat, int(game.fleet_stat("Pirate Raid", stat)))
+    rec(game, "stat none", int(game.fleet_stat("No Such Fleet", "hull")))
+    for system in ["Delta", "Alpha"]:
+        string list = ""
+        for k in 0..<game.system_fleet_count(system):
+            list = list + game.system_fleet(system, k) + ","
+        rec(game, "system fleets " + system + ": " + list, 1)
+    flag(game, "system fleet out of range", game.system_fleet("Delta", 2) == "" && game.system_fleet("Delta", -1) == "" && game.system_fleet_count("Nowhere") == 0)
+
+// Phase 1: a world change, as an event would make it.
+void changes(es.Game game):
+    flag(game, "change zeta", game.change("system \"Zeta\"\n\tgovernment \"Republic\""))
+    rec(game, "zeta gov " + game.system_government("Zeta"), 1)
+    flag(game, "change nowhere", game.change("system \"Nowhere\"\n\tgovernment \"Republic\""))
+
+// Phase 1: spawning in flight.
+void spawning(es.Game game):
+    rec(game, "spawn raid", game.spawn("Pirate Raid", "Pirate", "api2 raid", false))
+    rec(game, "spawn trader", game.spawn("Merchant", "Merchant", "api2 trader", true))
+    rec(game, "spawn none", game.spawn("No Such Fleet", "Pirate", "api2 none", false))
+    rec(game, "spawn ships now", game.ship_count())
+    rec(game, "tag strength spawned", int(game.tag_strength("api2 raid")))
+
+// Phase 1: map overlays and the planet button; a panel cannot open from on_step.
+void overlays(es.Game game):
+    game.map_line("Alpha", "Gamma", 0.0, 0.0, 1.0)
+    game.map_detail("Gamma", "Old", "dropped", 1.0, 1.0, 1.0)
+    game.map_clear()
+    // Mod API 4.
+    game.map_detail("Delta", "Raiders", "3 ships\nbound for Alpha", 0.5, 0.0, 0.0)
+    game.map_detail("Nowhere", "Lost", "never shown", 1.0, 1.0, 1.0)
+    game.map_line("Alpha", "Beta", 1.0, 0.0, 0.0)
+    game.map_line("Beta", "Delta", 1.0, 0.5, 0.0)
+    game.map_marker("Delta", 0.0, 1.0, 0.0, "pirates")
+    game.planet_button("Raid board")
+    game.panel_open("Not now", "on_step is not the player's action")
+    game.panel_button("Ignored")
+
+// Phase 2: the spawned ships, now in this step's snapshot.
+void inspect(es.Game game):
+    int raid = 0
+    int pirate = 0
+    int trader = 0
+    float strength = 0.0
+    for i in 0..<game.ship_count():
+        if game.ship_tag(i) == "api2 raid":
+            raid = raid + 1
+            strength = strength + game.ship_strength(i)
+            if game.ship_government(i) == "Pirate":
+                pirate = pirate + 1
+        if game.ship_tag(i) == "api2 trader" && game.ship_government(i) == "Merchant":
+            trader = trader + 1
+    rec(game, "seen raid", raid)
+    rec(game, "seen raid pirate", pirate)
+    rec(game, "seen trader", trader)
+    rec(game, "seen raid strength", int(strength))
+    flag(game, "untagged", game.ship_tag(0) == "" && game.ship_tag(-1) == "" && game.ship_government(-1) == "")
+
+// Phase 3: after fake_game has disabled some of them.
+void kills(es.Game game):
+    rec(game, "tag strength after", int(game.tag_strength("api2 raid")))
+    rec(game, "kills api2", game.player_kills("api2"))
+    rec(game, "kills api2 again", game.player_kills("api2"))
+    rec(game, "kills raid", game.player_kills("api2 raid"))
+
+void on_day(es.Game game, int day):
+    if !enabled(game):
+        return
+    rec(game, "days seen", game.condition("test: api2 days seen") + 1)
+    rec(game, "last day", day)
+    flag(game, "day matches", game.day() == day)
+
+void on_enter(es.Game game, string system):
+    if !enabled(game):
+        return
+    rec(game, "entered " + system, 1)
+    flag(game, "here matches", game.here() == system)
+    rec(game, "ambush " + system, game.spawn("Pirate Raid", "Pirate", "api2 ambush", true))
+
+void on_planet_button(es.Game game):
+    if !enabled(game):
+        return
+    rec(game, "planet clicks", game.condition("test: api2 planet clicks") + 1)
+    rec(game, "landed spawn", game.spawn("Pirate Raid", "Pirate", "api2 landed", false))
+    rec(game, "landed reputation", int(game.reputation("Pirate") * 100.0))
+    game.panel_open("Raid board", "Choose a target.")
+    game.panel_button("Cancel")
+    game.panel_button("Raid Delta")
+
+void on_panel(es.Game game, int button):
+    if !enabled(game):
+        return
+    panel_clicks = panel_clicks + 1
+    rec(game, "panel clicks", panel_clicks)
+    rec(game, "panel button", button)
+    if panel_clicks == 1:
+        game.panel_open("Raid planned", "Delta, at dawn.")
+        game.panel_button("Close")
+        game.planet_button("")
+    else:
+        game.panel_close()

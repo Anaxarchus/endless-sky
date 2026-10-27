@@ -737,6 +737,13 @@ void Outfit::Set(const string &attribute, double value)
 
 
 
+void Outfit::AddMass(double delta)
+{
+	mass += delta;
+}
+
+
+
 const set<const Outfit *> &Outfit::AmmoStored() const
 {
 	return ammoStored;

@@ -490,6 +490,13 @@ int64_t Fleet::Strength() const
 
 
 
+const WeightedList<Variant> &Fleet::Variants() const
+{
+	return variants;
+}
+
+
+
 // Obtain a positional reference and the radius of the object at that position (e.g. a planet).
 // Spaceport status can be modified during normal gameplay, so this information is not cached.
 pair<Point, double> Fleet::ChooseCenter(const System &system)

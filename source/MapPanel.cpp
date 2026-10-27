@@ -38,6 +38,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "MapShipyardPanel.h"
 #include "Mission.h"
 #include "MissionPanel.h"
+#include "ModHarness.h"
 #include "Planet.h"
 #include "PlayerInfo.h"
 #include "shader/PointerShader.h"
@@ -361,6 +362,9 @@ void MapPanel::Draw()
 	// Or available missions.
 	if(!isSimplified)
 		DrawMissions();
+	// And whatever the Dado mods have marked on it.
+	if(!isSimplified)
+		ModHarness::DrawMap(player, center, Zoom());
 }
 
 

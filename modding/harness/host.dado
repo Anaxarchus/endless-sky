@@ -1,0 +1,571 @@
+// The game's C surface (modding/include/es_host.h), and the wrappers the
+// `Game` class calls. A script cannot call a `foreign` function itself, so
+// each one is reached through a Dado function here; this is also the one
+// place a script's values are checked before they reach the game.
+//
+// The wrappers are named `host_*` because a class's method wins over a Dado
+// function of the same name, and `Game` publishes the short names.
+package esmod
+
+import "core:strings"
+
+foreign "es_host.h":
+    void es_log(cstring text)
+    void es_message(cstring text)
+    i32 es_step()
+    cstring es_system_name()
+    i32 es_ship_count()
+    i32 es_flagship()
+    cstring es_ship_name(i32 i)
+    cstring es_ship_model(i32 i)
+    i32 es_ship_is_player(i32 i)
+    i32 es_ship_is_disabled(i32 i)
+    f64 es_ship_hull(i32 i)
+    f64 es_ship_max_hull(i32 i)
+    f64 es_ship_shields(i32 i)
+    f64 es_ship_max_shields(i32 i)
+    f64 es_ship_energy(i32 i)
+    f64 es_ship_fuel(i32 i)
+    void es_ship_set_hull(i32 i, f64 value)
+    void es_ship_set_shields(i32 i, f64 value)
+    i64 es_condition_get(cstring name)
+    void es_condition_set(cstring name, i64 value)
+    i32 es_day()
+    cstring es_here()
+    i32 es_system_count()
+    cstring es_system_at(i32 i)
+    cstring es_system_government(cstring system)
+    i32 es_system_link_count(cstring system)
+    cstring es_system_link(cstring system, i32 k)
+    i32 es_system_inhabited(cstring system)
+    i32 es_system_defense_count(cstring system)
+    cstring es_system_defense_fleet(cstring system, i32 k)
+    i32 es_change(cstring text)
+    f64 es_attitude(cstring government, cstring toward)
+    f64 es_reputation(cstring government)
+    void es_set_reputation(cstring government, f64 value)
+    i32 es_plugin_enabled(cstring name)
+    f64 es_fleet_strength(cstring fleet)
+    f64 es_fleet_stat(cstring fleet, cstring stat)
+    i32 es_system_fleet_count(cstring system)
+    cstring es_system_fleet(cstring system, i32 k)
+    i32 es_spawn(cstring fleet, cstring government, cstring tag, i32 arrive)
+    cstring es_ship_tag(i32 i)
+    cstring es_ship_government(i32 i)
+    f64 es_ship_strength(i32 i)
+    f64 es_tag_strength(cstring tag)
+    i32 es_player_kills(cstring prefix)
+    void es_map_clear(cstring mod)
+    void es_map_line(cstring mod, cstring from, cstring to, f64 r, f64 g, f64 b)
+    void es_map_marker(cstring mod, cstring system, f64 r, f64 g, f64 b, cstring label)
+    void es_map_detail(cstring mod, cstring system, cstring title, cstring text, f64 r, f64 g, f64 b)
+    void es_planet_button(cstring mod, cstring label)
+    void es_panel_open(cstring mod, cstring title, cstring text)
+    void es_panel_button(cstring mod, cstring label)
+    void es_panel_close(cstring mod)
+    void es_hook_timing(cstring mod, cstring hook, i32 begin)
+    void es_outfitter_button(cstring mod, cstring label)
+    i32 es_outfitter_ship_count()
+    cstring es_outfitter_ship(i32 k)
+    i32 es_fleet_count()
+    cstring es_fleet_ship(i32 k)
+    cstring es_fleet_ship_name(cstring ship)
+    cstring es_fleet_ship_model(cstring ship)
+    i32 es_ship_outfit_count(cstring ship, cstring outfit)
+    i32 es_ship_integrated_count(cstring ship, cstring outfit)
+    i32 es_ship_integrate(cstring ship, cstring outfit, f64 scale)
+    cstring es_outfit_name(cstring outfit)
+    cstring es_outfit_category(cstring outfit)
+    f64 es_outfit_attribute(cstring outfit, cstring attribute)
+    i32 es_outfit_is_weapon(cstring outfit)
+    void es_confirm(cstring mod, cstring text, i32 token)
+    cstring es_data(cstring mod, cstring key)
+    void es_set_data(cstring mod, cstring key, cstring text)
+    cstring es_planet()
+    cstring es_planet_name(cstring planet)
+    cstring es_planet_system(cstring planet)
+    cstring es_planet_government(cstring planet)
+    i32 es_planet_count(cstring system)
+    cstring es_planet_at(cstring system, i32 k)
+    i32 es_planet_service(cstring planet, cstring service)
+    void es_panel_columns(cstring mod, cstring headers)
+    void es_panel_row(cstring mod, cstring cells)
+    void es_ask_number(cstring mod, cstring text, i32 token, i32 most)
+    void es_screen_open(cstring mod, cstring title, cstring text)
+    void es_panel_select(cstring mod, i32 row)
+
+// A ship index the game can take: inside i32, and in this step's snapshot.
+private bool valid_ship(i64 i):
+    return i >= 0 && i < i64(es_ship_count())
+
+void host_log(string8 text):
+    ref []char8 c = strings.clone_to_cstring(text)
+    defer #delete(c)
+    es_log(cstring(rawptr(&c[0])))
+
+void host_message(string8 text):
+    ref []char8 c = strings.clone_to_cstring(text)
+    defer #delete(c)
+    es_message(cstring(rawptr(&c[0])))
+
+i64 host_step():
+    return es_step()
+
+string8 host_system_name():
+    return strings.borrow_from_cstring(es_system_name())
+
+i64 host_ship_count():
+    return es_ship_count()
+
+i64 host_flagship():
+    return es_flagship()
+
+string8 host_ship_name(i64 i):
+    if !valid_ship(i):
+        return ""
+    return strings.borrow_from_cstring(es_ship_name(i32(i)))
+
+string8 host_ship_model(i64 i):
+    if !valid_ship(i):
+        return ""
+    return strings.borrow_from_cstring(es_ship_model(i32(i)))
+
+bool host_ship_is_player(i64 i):
+    return valid_ship(i) && es_ship_is_player(i32(i)) != 0
+
+bool host_ship_is_disabled(i64 i):
+    return valid_ship(i) && es_ship_is_disabled(i32(i)) != 0
+
+f64 host_ship_hull(i64 i):
+    return es_ship_hull(i32(i)) if valid_ship(i) else 0.0
+
+f64 host_ship_max_hull(i64 i):
+    return es_ship_max_hull(i32(i)) if valid_ship(i) else 0.0
+
+f64 host_ship_shields(i64 i):
+    return es_ship_shields(i32(i)) if valid_ship(i) else 0.0
+
+f64 host_ship_max_shields(i64 i):
+    return es_ship_max_shields(i32(i)) if valid_ship(i) else 0.0
+
+f64 host_ship_energy(i64 i):
+    return es_ship_energy(i32(i)) if valid_ship(i) else 0.0
+
+f64 host_ship_fuel(i64 i):
+    return es_ship_fuel(i32(i)) if valid_ship(i) else 0.0
+
+void host_ship_set_hull(i64 i, f64 value):
+    if valid_ship(i):
+        es_ship_set_hull(i32(i), value)
+
+void host_ship_set_shields(i64 i, f64 value):
+    if valid_ship(i):
+        es_ship_set_shields(i32(i), value)
+
+i64 host_condition(string8 name):
+    ref []char8 c = strings.clone_to_cstring(name)
+    defer #delete(c)
+    return es_condition_get(cstring(rawptr(&c[0])))
+
+void host_set_condition(string8 name, i64 value):
+    ref []char8 c = strings.clone_to_cstring(name)
+    defer #delete(c)
+    es_condition_set(cstring(rawptr(&c[0])), value)
+
+// ---- Mod API 2 ----
+// Strings going to the game are copied into NUL-terminated buffers; strings
+// coming back are borrowed and copied by the crossing into the script.
+
+private string8 from_c(cstring c):
+    return strings.borrow_from_cstring(c)
+
+i64 host_day():
+    return es_day()
+
+string8 host_here():
+    return from_c(es_here())
+
+i64 host_system_count():
+    return es_system_count()
+
+string8 host_system_at(i64 i):
+    if i < 0 || i >= i64(es_system_count()):
+        return ""
+    return from_c(es_system_at(i32(i)))
+
+string8 host_system_government(string8 system):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    return from_c(es_system_government(cstring(rawptr(&s[0]))))
+
+i64 host_system_link_count(string8 system):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    return es_system_link_count(cstring(rawptr(&s[0])))
+
+string8 host_system_link(string8 system, i64 k):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    cstring c = cstring(rawptr(&s[0]))
+    if k < 0 || k >= i64(es_system_link_count(c)):
+        return ""
+    return from_c(es_system_link(c, i32(k)))
+
+bool host_system_inhabited(string8 system):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    return es_system_inhabited(cstring(rawptr(&s[0]))) != 0
+
+i64 host_system_defense_count(string8 system):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    return es_system_defense_count(cstring(rawptr(&s[0])))
+
+string8 host_system_defense_fleet(string8 system, i64 k):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    cstring c = cstring(rawptr(&s[0]))
+    if k < 0 || k >= i64(es_system_defense_count(c)):
+        return ""
+    return from_c(es_system_defense_fleet(c, i32(k)))
+
+bool host_change(string8 text):
+    ref []char8 s = strings.clone_to_cstring(text)
+    defer #delete(s)
+    return es_change(cstring(rawptr(&s[0]))) != 0
+
+f64 host_attitude(string8 government, string8 toward):
+    ref []char8 a = strings.clone_to_cstring(government)
+    defer #delete(a)
+    ref []char8 b = strings.clone_to_cstring(toward)
+    defer #delete(b)
+    return es_attitude(cstring(rawptr(&a[0])), cstring(rawptr(&b[0])))
+
+f64 host_reputation(string8 government):
+    ref []char8 a = strings.clone_to_cstring(government)
+    defer #delete(a)
+    return es_reputation(cstring(rawptr(&a[0])))
+
+void host_set_reputation(string8 government, f64 value):
+    ref []char8 a = strings.clone_to_cstring(government)
+    defer #delete(a)
+    es_set_reputation(cstring(rawptr(&a[0])), value)
+
+f64 host_fleet_strength(string8 fleet):
+    ref []char8 a = strings.clone_to_cstring(fleet)
+    defer #delete(a)
+    return es_fleet_strength(cstring(rawptr(&a[0])))
+
+f64 host_fleet_stat(string8 fleet, string8 stat):
+    ref []char8 a = strings.clone_to_cstring(fleet)
+    defer #delete(a)
+    ref []char8 b = strings.clone_to_cstring(stat)
+    defer #delete(b)
+    return es_fleet_stat(cstring(rawptr(&a[0])), cstring(rawptr(&b[0])))
+
+i64 host_system_fleet_count(string8 system):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    return es_system_fleet_count(cstring(rawptr(&s[0])))
+
+string8 host_system_fleet(string8 system, i64 k):
+    ref []char8 s = strings.clone_to_cstring(system)
+    defer #delete(s)
+    cstring c = cstring(rawptr(&s[0]))
+    if k < 0 || k >= i64(es_system_fleet_count(c)):
+        return ""
+    return from_c(es_system_fleet(c, i32(k)))
+
+i64 host_spawn(string8 fleet, string8 government, string8 tag, bool arrive):
+    ref []char8 a = strings.clone_to_cstring(fleet)
+    defer #delete(a)
+    ref []char8 b = strings.clone_to_cstring(government)
+    defer #delete(b)
+    ref []char8 c = strings.clone_to_cstring(tag)
+    defer #delete(c)
+    return es_spawn(cstring(rawptr(&a[0])), cstring(rawptr(&b[0])), cstring(rawptr(&c[0])), 1 if arrive else 0)
+
+string8 host_ship_tag(i64 i):
+    if !valid_ship(i):
+        return ""
+    return from_c(es_ship_tag(i32(i)))
+
+string8 host_ship_government(i64 i):
+    if !valid_ship(i):
+        return ""
+    return from_c(es_ship_government(i32(i)))
+
+f64 host_ship_strength(i64 i):
+    return es_ship_strength(i32(i)) if valid_ship(i) else 0.0
+
+f64 host_tag_strength(string8 tag):
+    ref []char8 a = strings.clone_to_cstring(tag)
+    defer #delete(a)
+    return es_tag_strength(cstring(rawptr(&a[0])))
+
+i64 host_player_kills(string8 prefix):
+    ref []char8 a = strings.clone_to_cstring(prefix)
+    defer #delete(a)
+    return es_player_kills(cstring(rawptr(&a[0])))
+
+void host_map_clear(string8 mod):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    es_map_clear(cstring(rawptr(&m[0])))
+
+void host_map_line(string8 mod, string8 from, string8 to, f64 r, f64 g, f64 b):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 x = strings.clone_to_cstring(from)
+    defer #delete(x)
+    ref []char8 y = strings.clone_to_cstring(to)
+    defer #delete(y)
+    es_map_line(cstring(rawptr(&m[0])), cstring(rawptr(&x[0])), cstring(rawptr(&y[0])), r, g, b)
+
+void host_map_marker(string8 mod, string8 system, f64 r, f64 g, f64 b, string8 label):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 x = strings.clone_to_cstring(system)
+    defer #delete(x)
+    ref []char8 l = strings.clone_to_cstring(label)
+    defer #delete(l)
+    es_map_marker(cstring(rawptr(&m[0])), cstring(rawptr(&x[0])), r, g, b, cstring(rawptr(&l[0])))
+
+void host_map_detail(string8 mod, string8 system, string8 title, string8 text, f64 r, f64 g, f64 b):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 x = strings.clone_to_cstring(system)
+    defer #delete(x)
+    ref []char8 h = strings.clone_to_cstring(title)
+    defer #delete(h)
+    ref []char8 t = strings.clone_to_cstring(text)
+    defer #delete(t)
+    es_map_detail(cstring(rawptr(&m[0])), cstring(rawptr(&x[0])), cstring(rawptr(&h[0])), cstring(rawptr(&t[0])), r, g, b)
+
+void host_planet_button(string8 mod, string8 label):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 l = strings.clone_to_cstring(label)
+    defer #delete(l)
+    es_planet_button(cstring(rawptr(&m[0])), cstring(rawptr(&l[0])))
+
+void host_panel_open(string8 mod, string8 title, string8 text):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 t = strings.clone_to_cstring(title)
+    defer #delete(t)
+    ref []char8 x = strings.clone_to_cstring(text)
+    defer #delete(x)
+    es_panel_open(cstring(rawptr(&m[0])), cstring(rawptr(&t[0])), cstring(rawptr(&x[0])))
+
+void host_panel_button(string8 mod, string8 label):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 l = strings.clone_to_cstring(label)
+    defer #delete(l)
+    es_panel_button(cstring(rawptr(&m[0])), cstring(rawptr(&l[0])))
+
+void host_panel_close(string8 mod):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    es_panel_close(cstring(rawptr(&m[0])))
+
+bool host_plugin_enabled(string8 name):
+    ref []char8 a = strings.clone_to_cstring(name)
+    defer #delete(a)
+    return es_plugin_enabled(cstring(rawptr(&a[0]))) != 0
+
+
+// ---- Mod API 5 ----
+
+void host_outfitter_button(string8 mod, string8 label):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 l = strings.clone_to_cstring(label)
+    defer #delete(l)
+    es_outfitter_button(cstring(rawptr(&m[0])), cstring(rawptr(&l[0])))
+
+i64 host_outfitter_ship_count():
+    return es_outfitter_ship_count()
+
+string8 host_outfitter_ship(i64 k):
+    if k < 0 || k >= i64(es_outfitter_ship_count()):
+        return ""
+    return from_c(es_outfitter_ship(i32(k)))
+
+i64 host_fleet_count():
+    return es_fleet_count()
+
+string8 host_fleet_ship(i64 k):
+    if k < 0 || k >= i64(es_fleet_count()):
+        return ""
+    return from_c(es_fleet_ship(i32(k)))
+
+string8 host_fleet_ship_name(string8 ship):
+    ref []char8 s = strings.clone_to_cstring(ship)
+    defer #delete(s)
+    return from_c(es_fleet_ship_name(cstring(rawptr(&s[0]))))
+
+string8 host_fleet_ship_model(string8 ship):
+    ref []char8 s = strings.clone_to_cstring(ship)
+    defer #delete(s)
+    return from_c(es_fleet_ship_model(cstring(rawptr(&s[0]))))
+
+i64 host_ship_outfit_count(string8 ship, string8 outfit):
+    ref []char8 s = strings.clone_to_cstring(ship)
+    defer #delete(s)
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    return es_ship_outfit_count(cstring(rawptr(&s[0])), cstring(rawptr(&o[0])))
+
+i64 host_ship_integrated_count(string8 ship, string8 outfit):
+    ref []char8 s = strings.clone_to_cstring(ship)
+    defer #delete(s)
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    return es_ship_integrated_count(cstring(rawptr(&s[0])), cstring(rawptr(&o[0])))
+
+bool host_ship_integrate(string8 ship, string8 outfit, f64 scale):
+    ref []char8 s = strings.clone_to_cstring(ship)
+    defer #delete(s)
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    return es_ship_integrate(cstring(rawptr(&s[0])), cstring(rawptr(&o[0])), scale) != 0
+
+string8 host_outfit_name(string8 outfit):
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    return from_c(es_outfit_name(cstring(rawptr(&o[0]))))
+
+string8 host_outfit_category(string8 outfit):
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    return from_c(es_outfit_category(cstring(rawptr(&o[0]))))
+
+f64 host_outfit_attribute(string8 outfit, string8 attribute):
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    ref []char8 a = strings.clone_to_cstring(attribute)
+    defer #delete(a)
+    return es_outfit_attribute(cstring(rawptr(&o[0])), cstring(rawptr(&a[0])))
+
+bool host_outfit_is_weapon(string8 outfit):
+    ref []char8 o = strings.clone_to_cstring(outfit)
+    defer #delete(o)
+    return es_outfit_is_weapon(cstring(rawptr(&o[0]))) != 0
+
+void host_confirm(string8 mod, string8 text, i64 token):
+    if token < -2147483648 || token > 2147483647:
+        return
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 t = strings.clone_to_cstring(text)
+    defer #delete(t)
+    es_confirm(cstring(rawptr(&m[0])), cstring(rawptr(&t[0])), i32(token))
+
+// The harness times each hook it runs (es_hook_timing); not part of the mod API.
+void host_hook_timing(string8 mod, string8 hook, bool begin):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 h = strings.clone_to_cstring(hook)
+    defer #delete(h)
+    es_hook_timing(cstring(rawptr(&m[0])), cstring(rawptr(&h[0])), 1 if begin else 0)
+
+// ---- Mod API 6 ----
+
+private bool in_i32(i64 v):
+    return v >= -2147483648 && v <= 2147483647
+
+string8 host_data(string8 mod, string8 key):
+    ref []char8 modc = strings.clone_to_cstring(mod)
+    defer #delete(modc)
+    ref []char8 keyc = strings.clone_to_cstring(key)
+    defer #delete(keyc)
+    return from_c(es_data(cstring(rawptr(&modc[0])), cstring(rawptr(&keyc[0]))))
+
+void host_set_data(string8 mod, string8 key, string8 text):
+    ref []char8 modc = strings.clone_to_cstring(mod)
+    defer #delete(modc)
+    ref []char8 keyc = strings.clone_to_cstring(key)
+    defer #delete(keyc)
+    ref []char8 textc = strings.clone_to_cstring(text)
+    defer #delete(textc)
+    es_set_data(cstring(rawptr(&modc[0])), cstring(rawptr(&keyc[0])), cstring(rawptr(&textc[0])))
+
+string8 host_planet():
+    return from_c(es_planet())
+
+string8 host_planet_name(string8 planet):
+    ref []char8 planetc = strings.clone_to_cstring(planet)
+    defer #delete(planetc)
+    return from_c(es_planet_name(cstring(rawptr(&planetc[0]))))
+
+string8 host_planet_system(string8 planet):
+    ref []char8 planetc = strings.clone_to_cstring(planet)
+    defer #delete(planetc)
+    return from_c(es_planet_system(cstring(rawptr(&planetc[0]))))
+
+string8 host_planet_government(string8 planet):
+    ref []char8 planetc = strings.clone_to_cstring(planet)
+    defer #delete(planetc)
+    return from_c(es_planet_government(cstring(rawptr(&planetc[0]))))
+
+i64 host_planet_count(string8 system):
+    ref []char8 systemc = strings.clone_to_cstring(system)
+    defer #delete(systemc)
+    return es_planet_count(cstring(rawptr(&systemc[0])))
+
+string8 host_planet_at(string8 system, i64 k):
+    ref []char8 systemc = strings.clone_to_cstring(system)
+    defer #delete(systemc)
+    if !in_i32(k):
+        return ""
+    return from_c(es_planet_at(cstring(rawptr(&systemc[0])), i32(k)))
+
+bool host_planet_service(string8 planet, string8 service):
+    ref []char8 planetc = strings.clone_to_cstring(planet)
+    defer #delete(planetc)
+    ref []char8 servicec = strings.clone_to_cstring(service)
+    defer #delete(servicec)
+    return es_planet_service(cstring(rawptr(&planetc[0])), cstring(rawptr(&servicec[0]))) != 0
+
+void host_panel_columns(string8 mod, string8 headers):
+    ref []char8 modc = strings.clone_to_cstring(mod)
+    defer #delete(modc)
+    ref []char8 headersc = strings.clone_to_cstring(headers)
+    defer #delete(headersc)
+    es_panel_columns(cstring(rawptr(&modc[0])), cstring(rawptr(&headersc[0])))
+
+void host_panel_row(string8 mod, string8 cells):
+    ref []char8 modc = strings.clone_to_cstring(mod)
+    defer #delete(modc)
+    ref []char8 cellsc = strings.clone_to_cstring(cells)
+    defer #delete(cellsc)
+    es_panel_row(cstring(rawptr(&modc[0])), cstring(rawptr(&cellsc[0])))
+
+void host_ask_number(string8 mod, string8 text, i64 token, i64 most):
+    if !in_i32(token) || !in_i32(most):
+        return
+    ref []char8 modc = strings.clone_to_cstring(mod)
+    defer #delete(modc)
+    ref []char8 textc = strings.clone_to_cstring(text)
+    defer #delete(textc)
+    es_ask_number(cstring(rawptr(&modc[0])), cstring(rawptr(&textc[0])), i32(token), i32(most))
+
+// ---- Mod API 7 ----
+
+void host_screen_open(string8 mod, string8 title, string8 text):
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    ref []char8 t = strings.clone_to_cstring(title)
+    defer #delete(t)
+    ref []char8 x = strings.clone_to_cstring(text)
+    defer #delete(x)
+    es_screen_open(cstring(rawptr(&m[0])), cstring(rawptr(&t[0])), cstring(rawptr(&x[0])))
+
+void host_panel_select(string8 mod, i64 row):
+    if !in_i32(row):
+        return
+    ref []char8 m = strings.clone_to_cstring(mod)
+    defer #delete(m)
+    es_panel_select(cstring(rawptr(&m[0])), i32(row))

@@ -169,6 +169,9 @@ public:
 	void DeployDefense(std::list<std::shared_ptr<Ship>> &ships) const;
 	void ResetDefense() const;
 	bool IsDefending() const;
+	// The fleets that defend this planet when the player demands tribute, one
+	// entry per fleet (a fleet listed with a count appears that many times).
+	const std::vector<const Fleet *> &DefenseFleets() const;
 	// The amount of reputation with this planet's government that is lost
 	// daily if the player has dominated this planet.
 	double DailyTributePenalty() const;

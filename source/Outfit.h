@@ -133,6 +133,9 @@ public:
 	// special attributes, like cost and mass.
 	void Set(const char *attribute, double value);
 	void Set(const std::string &attribute, double value);
+	// Change this outfit's mass by delta tons. A ship uses it for the mass its
+	// integrated outfits save (see Ship::Integrate).
+	void AddMass(double delta);
 
 	const std::shared_ptr<const Weapon> &GetWeapon() const;
 	// Get the ammo if this is an ammo storage outfit.

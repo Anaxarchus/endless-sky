@@ -27,6 +27,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "GameData.h"
 #include "Hardpoint.h"
 #include "Mission.h"
+#include "ModHarness.h"
 #include "Outfit.h"
 #include "Planet.h"
 #include "PlayerInfo.h"
@@ -415,17 +416,21 @@ ShopPanel::TransactionResult OutfitterPanel::CanMoveOutfit(OutfitLocation fromLo
 			vector<pair<string, vector<string>>> dependentOutfitErrors;
 			vector<string> errorDetails;
 			bool foundOutfit = false;
+			bool foundIntegrated = false;
 			for(const Ship *ship : playerShips)
 			{
-				if(ship->OutfitCount(selectedOutfit) > 0)
+				// Integrated outfits are installed for good.
+				if(ship->OutfitCount(selectedOutfit) > 0 && !ship->RemovableCount(selectedOutfit))
+					foundIntegrated = true;
+				if(ship->RemovableCount(selectedOutfit) > 0)
 				{
 					foundOutfit = true;
 					Outfit attributes = ship->Attributes();
 					// If this outfit has linked outfits, check if we could sell it
 					// if we sold all the linked outfits first.
 					for(const Outfit *linked : selectedOutfit->LinkedOutfits())
-						if(ship->OutfitCount(linked))
-							attributes.Add(*linked, -ship->OutfitCount(linked));
+						if(ship->RemovableCount(linked))
+							attributes.Add(*linked, -ship->RemovableCount(linked));
 					// Linked outfits are not a factor (now), check whether this ship can uninstall this outfit.
 					canSource = attributes.CanAdd(*selectedOutfit, -1);
 
@@ -459,6 +464,10 @@ ShopPanel::TransactionResult OutfitterPanel::CanMoveOutfit(OutfitLocation fromLo
 				break;
 
 			// The outfit cannot be installed from any ship.
+			if(!foundOutfit && foundIntegrated)
+				return {canSource, canPlace, "The " + selectedOutfit->DisplayName() + " on "
+					+ (playerShips.size() > 1 ? "the selected ships is" : "this ship is")
+					+ " integrated into the hull, and cannot be removed."};
 			if(!foundOutfit)
 				return {canSource, canPlace,
 					"You don't have any " + selectedOutfit->PluralName() + " to " + actionName + "."};
@@ -907,6 +916,8 @@ ShopPanel::TransactionResult OutfitterPanel::MoveOutfit(OutfitLocation fromLocat
 						mustUninstall = max<int>(mustUninstall, quotient + (remainder ? 1 : 0));
 					}
 
+					// Integrated linked outfits stay installed.
+					mustUninstall = min(mustUninstall, ship->RemovableCount(linked));
 					if(mustUninstall)
 					{
 						// AddOutfit ensures that we don't uninstall more than is actually installed.
@@ -1135,7 +1146,8 @@ bool OutfitterPanel::ShipCanAdd(const Ship *ship, const Outfit *outfit)
 // Returns true if this ship can uninstall the selected outfit.
 bool OutfitterPanel::ShipCanRemove(const Ship *ship, const Outfit *outfit)
 {
-	if(!ship->OutfitCount(outfit))
+	// Integrated outfits are installed for good.
+	if(!ship->RemovableCount(outfit))
 		return false;
 
 	// If this outfit has linked outfits, check if we could sell it if we sold all
@@ -1146,7 +1158,7 @@ bool OutfitterPanel::ShipCanRemove(const Ship *ship, const Outfit *outfit)
 		Outfit attributes = ship->Attributes();
 		for(const Outfit *linked : outfit->LinkedOutfits())
 		{
-			int available = ship->OutfitCount(linked);
+			int available = ship->RemovableCount(linked);
 			if(available)
 				attributes.Add(*linked, -available);
 		}
@@ -1326,10 +1338,39 @@ int OutfitterPanel::FindItem(const string &text) const
 
 
 
+namespace {
+	// Mods' outfitter buttons go in rows of three above the outfitter's own,
+	// and are pressed through these key codes, which no key sends.
+	constexpr size_t MAX_MOD_BUTTONS = 6;
+	constexpr SDL_Keycode FIRST_MOD_KEY = 1;
+
+	size_t ModButtonRows()
+	{
+		size_t count = min(ModHarness::OutfitterButtons().size(), MAX_MOD_BUTTONS);
+		return (count + 2) / 3;
+	}
+}
+
+
+
 double OutfitterPanel::ButtonPanelHeight() const
 {
 	// The 70 = (3 x 10 (pad) + 20 x 2 (text)) for the credit and cargo space information lines.
-	return 70. + BUTTON_HEIGHT * 3 + BUTTON_ROW_PAD * 2;
+	const double rows = 3 + ModButtonRows();
+	return 70. + BUTTON_HEIGHT * rows + BUTTON_ROW_PAD * (rows - 1);
+}
+
+
+
+vector<Ship *> OutfitterPanel::ModShips() const
+{
+	vector<Ship *> ships;
+	if(playerShip)
+		ships.push_back(playerShip);
+	for(Ship *ship : playerShips)
+		if(ship != playerShip)
+			ships.push_back(ship);
+	return ships;
 }
 
 
@@ -1377,6 +1418,23 @@ void OutfitterPanel::DrawButtons()
 
 	// Clear the buttonZones, they will be populated again as buttons are drawn.
 	buttonZones.clear();
+
+	// Mods' buttons, in rows above the outfitter's own.
+	const vector<string> modButtons = ModHarness::OutfitterButtons();
+	if(!modButtons.empty())
+	{
+		const vector<Ship *> ships = ModShips();
+		const size_t rows = ModButtonRows();
+		for(size_t i = 0; i < min(modButtons.size(), MAX_MOD_BUTTONS); ++i)
+		{
+			const double row = static_cast<double>(i / 3) - static_cast<double>(rows);
+			const double column = static_cast<double>(i % 3) - 1.;
+			const char key = static_cast<char>(FIRST_MOD_KEY + i);
+			DrawButton(modButtons[i], Rectangle(Point(buttonCenterX + buttonOffsetX * column,
+				rowBaseY + rowOffsetY * row), buttonSize),
+				ModHarness::OutfitterButtonActive(i, player, ships, selectedOutfit), hoverButton == key, key);
+		}
+	}
 
 	// Row 1.
 	DrawButton("_Buy", Rectangle(Point(buttonCenterX + buttonOffsetX * -1, rowBaseY + rowOffsetY * 0), buttonSize),
@@ -1441,6 +1499,18 @@ void OutfitterPanel::DrawButtons()
 ShopPanel::TransactionResult OutfitterPanel::HandleShortcuts(SDL_Keycode key)
 {
 	TransactionResult result = false;
+	if(key >= FIRST_MOD_KEY && key < FIRST_MOD_KEY + static_cast<SDL_Keycode>(MAX_MOD_BUTTONS))
+	{
+		// A mod's button: its hook does what it does, and says so itself.
+		size_t i = key - FIRST_MOD_KEY;
+		const vector<Ship *> ships = ModShips();
+		if(ModHarness::OutfitterButtonActive(i, player, ships, selectedOutfit))
+		{
+			UI::PlaySound(UI::UISound::NORMAL);
+			ModHarness::OutfitterButton(i, player, GetUI(), ships, selectedOutfit);
+		}
+		return true;
+	}
 	if(key == 'b')
 	{
 		// Buy and install up to <modifier> outfits for each selected ship.
