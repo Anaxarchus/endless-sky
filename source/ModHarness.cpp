@@ -725,7 +725,9 @@ namespace {
 	// and sending clicks and keys back to the mod.
 	class ModView : public Panel {
 	public:
-		explicit ModView(PlayerInfo &player) : player(player) {}
+		// Escape is the mod panel's own (it closes it), as in the game's map and
+		// info panels: not interruptible, so the game does not open its menu over it.
+		explicit ModView(PlayerInfo &player) : player(player) { SetInterruptible(false); }
 
 	protected:
 		// The table: a row of headings, then a scrolling list of rows the player
@@ -1006,7 +1008,15 @@ namespace {
 	protected:
 		bool KeyDown(SDL_Keycode key, Uint16 mod, const Command &command, bool isNewPress) override
 		{
-			return !panel.full && PressDigit(key);
+			if(panel.full)
+				return false;
+			// Escape closes the panel; the planet screen then shows itself again.
+			if(key == SDLK_ESCAPE)
+			{
+				panel.open = false;
+				return true;
+			}
+			return PressDigit(key);
 		}
 
 	private:
