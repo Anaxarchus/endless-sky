@@ -1,4 +1,4 @@
 # The Dado mod loader that Argosy's releases bundle (fork_release.yaml), as
 # "<GitHub repository> <release tag>". The release must already exist, with the
 # per-platform archives and SHA256SUMS that the loader's tools/release.sh makes.
-Anaxarchus/es-modloader v0.1.0
+Anaxarchus/es-modloader v0.2.0

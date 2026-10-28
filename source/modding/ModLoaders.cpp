@@ -284,6 +284,28 @@ string ModLoaders::TimedName() const
 
 
 
+bool ModLoaders::SectionName(set<string> &seen, const char *name, string &out)
+{
+	if(!name || strnlen(name, MAX_SECTION_NAME + 1) > MAX_SECTION_NAME)
+		return false;
+	for(const char *c = name; *c; ++c)
+		if(static_cast<unsigned char>(*c) < 0x20 || *c == 0x7F)
+			return false;
+	// "" ends the sections: timed as no section, which is no new name.
+	if(!*name || seen.count(name))
+		out = name;
+	else if(seen.size() >= MAX_SECTIONS)
+		out = "(other)";
+	else
+	{
+		seen.insert(name);
+		out = name;
+	}
+	return true;
+}
+
+
+
 const char *ModLoaders::RunningMod() const
 {
 	if(!HookOpen() || !bracket.owned || current == NONE)

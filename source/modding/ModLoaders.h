@@ -100,6 +100,15 @@ public:
 	// being called opened the bracket and owns the mod. Null otherwise.
 	const char *RunningMod() const;
 
+	// Mod API 10's timing_section: the name a section of a mod's hook is timed
+	// under, in `out` ("" for no section). `seen` holds the names that mod used
+	// so far. A name with a control character, or longer than MAX_SECTION_NAME,
+	// is refused (answers false); past MAX_SECTIONS names a mod's new ones are all
+	// timed as "(other)".
+	static constexpr size_t MAX_SECTIONS = 32;
+	static constexpr size_t MAX_SECTION_NAME = 64;
+	static bool SectionName(std::set<std::string> &seen, const char *name, std::string &out);
+
 
 private:
 	static constexpr size_t NONE = static_cast<size_t>(-1);

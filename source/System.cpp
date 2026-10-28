@@ -1090,6 +1090,14 @@ int System::Trade(const string &commodity) const
 
 
 
+int System::BasePrice(const string &commodity) const
+{
+	auto it = trade.find(commodity);
+	return (it == trade.end()) ? 0 : it->second.base;
+}
+
+
+
 bool System::HasTrade() const
 {
 	return !trade.empty();

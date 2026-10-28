@@ -68,6 +68,12 @@ public:
 	// The engine rebuilt its ship list (taking off, loading): ships the mods
 	// spawned are gone, so the next step runs on_enter again.
 	static void ShipsReplaced();
+	// The game is about to write the pilot (mod API 10): the loaders' save
+	// entry runs, so what the mods write now is saved with it. Called first
+	// thing in PlayerInfo::Save(DataWriter &), so it covers every save; does
+	// nothing from inside a hook, before the mods start, or for a pilot no hook
+	// has run for yet.
+	static void Saving(const PlayerInfo &player);
 
 	// Draw the mods' map overlays. center and zoom are the map's own transform:
 	// a system at galaxy position p is drawn at zoom * (p + center).

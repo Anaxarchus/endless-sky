@@ -21,15 +21,22 @@ this program. If not, see <https://www.gnu.org/licenses/>.
  *   TL_SIZE      the size it reports (sizeof(EsLoader))
  *   TL_RESULT    what es_loader_init answers (0)
  *   TL_NO_INIT   defined: no es_loader_init at all
+ *   TL_LISTEN    a notification pattern its mod listens for in on_load (none)
+ *   TL_API9      defined: a loader built for mod API 9, whose table ends at
+ *                shutdown; it leaves junk past its size where the API 10
+ *                entries are, which the game must neither keep nor call
  *   TL_MISBEHAVE defined: misuse the brackets, as a loader whose mod failed
  *                might. es_loader_init brackets a mod and calls for it; step
  *                leaves its bracket open (the mod "threw"); enter first makes
  *                an unbracketed call, then ends a bracket it never began.
  * Every hook brackets the mod with hook_timing and makes one mod-scoped call
  * (planet_button, with the hook's name as the label), so the host can check
- * which mod it was for. */
+ * which mod it was for. An API 10 loader also runs save, pilot_loaded and
+ * notification: a notification is answered by posting another (see
+ * notification below), so two loaders can play ping-pong through the game. */
 #include "../../source/modding/es_api.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifndef TL_NAME
@@ -60,6 +67,12 @@ typedef struct TlStats {
 	int planet_buttons;
 	int panels;
 	char last_target[64];
+	/* Mod API 10. */
+	int saves;
+	int pilot_loads;
+	int notes;
+	char last_note[160];
+	int junk_calls;
 } TlStats;
 
 static TlStats stats;
@@ -79,6 +92,21 @@ static void hook(const char *name)
 	game->hook_timing(TL_MOD, name, 0);
 }
 
+/* What the host test calls to have this loader's mod post a notification: in a
+ * bracket for `as` (its own mod, or another loader's, which the game must
+ * refuse), or with no bracket at all for "". Answers what notify answered. */
+ES_LOADER_EXPORT int32_t ES_CALL tl_post(const char *as, const char *name, const char *payload)
+{
+	if(!game || !ES_HOST_HAS(game, notify))
+		return -1;
+	if(!*as)
+		return game->notify(name, payload);
+	game->hook_timing(as, "post", 1);
+	int32_t result = game->notify(name, payload);
+	game->hook_timing(as, "post", 0);
+	return result;
+}
+
 static void ES_CALL load_mods(int32_t count, const char *const *paths, const char *const *names)
 {
 	++stats.load_calls;
@@ -87,6 +115,11 @@ static void ES_CALL load_mods(int32_t count, const char *const *paths, const cha
 	{
 		strncpy(stats.last_source_name, names[count - 1], sizeof(stats.last_source_name) - 1);
 		hook("on_load");
+#ifdef TL_LISTEN
+		game->hook_timing(TL_MOD, "on_load", 1);
+		game->listen(TL_LISTEN);
+		game->hook_timing(TL_MOD, "on_load", 0);
+#endif
 	}
 }
 
@@ -147,13 +180,52 @@ static void ES_CALL shutdown(void)
 	game->log("shutdown " TL_NAME);
 }
 
+#ifdef TL_API9
+/* Left where an API 10 table has save, pilot_loaded and notification. */
+static void ES_CALL junk(void)
+{
+	++stats.junk_calls;
+}
+#else
+static void ES_CALL save(void)
+{
+	++stats.saves;
+	hook("on_save");
+}
+
+static void ES_CALL pilot_loaded(void)
+{
+	++stats.pilot_loads;
+	hook("on_pilot_loaded");
+}
+
+/* Answer "test.ping" with "test.pong" when the payload is "reply"; with
+ * "loop", answer each with the other, forever (the game caps the cascade). */
+static void ES_CALL notification(const char *mod, const char *name, const char *payload, const char *sender)
+{
+	game->hook_timing(mod, "on_notification", 1);
+	++stats.notes;
+	snprintf(stats.last_note, sizeof(stats.last_note), "%s|%s|%s", name, payload, sender);
+	if(!strcmp(payload, "reply") && !strcmp(name, "test.ping"))
+		game->notify("test.pong", payload);
+	else if(!strcmp(payload, "loop"))
+		game->notify(strcmp(name, "test.ping") ? "test.ping" : "test.pong", payload);
+	game->hook_timing(mod, "on_notification", 0);
+}
+#endif
+
 ES_LOADER_EXPORT int32_t ES_CALL es_loader_init(const EsHost *host, EsLoader *loader)
 {
-	/* A valid table: the game's version, every API 9 call, a zeroed loader table. */
-	if(!host || host->version != ES_API_VERSION || !ES_HOST_HAS(host, ship_in_stock)
+	/* A valid table: the game's version (any from 9 for an API 9 loader), every
+	 * API 9 call (and the bus for an API 10 loader), a zeroed loader table. */
+#ifdef TL_API9
+	if(!host || host->version < 9 || !ES_HOST_HAS(host, ship_in_stock)
+#else
+	if(!host || host->version != ES_API_VERSION || !ES_HOST_HAS(host, listen) || !host->notify || !host->listen
+#endif
 			|| !host->log || !host->hook_timing || !host->planet_button)
 		return 10;
-	if(!loader || loader->size < sizeof(EsLoader) || loader->load_mods || loader->shutdown)
+	if(!loader || loader->size < sizeof(EsLoader) || loader->load_mods || loader->shutdown || loader->notification)
 		return 11;
 	game = host;
 	stats.init_ok = 1;
@@ -164,8 +236,20 @@ ES_LOADER_EXPORT int32_t ES_CALL es_loader_init(const EsHost *host, EsLoader *lo
 	host->hook_timing("init_mod", "init", 0);
 #endif
 
+#ifdef TL_API9
+	loader->size = (uint32_t)offsetof(EsLoader, save);
+	loader->version = 9;
+	/* Not this loader's: past the size it reports. */
+	loader->save = junk;
+	loader->pilot_loaded = junk;
+	loader->notification = (void (ES_CALL *)(const char *, const char *, const char *, const char *))(void (*)(void))junk;
+#else
 	loader->size = (uint32_t)(TL_SIZE);
 	loader->version = TL_VERSION;
+	loader->save = save;
+	loader->pilot_loaded = pilot_loaded;
+	loader->notification = notification;
+#endif
 	loader->name = TL_NAME;
 	loader->load_mods = load_mods;
 	loader->count = count;

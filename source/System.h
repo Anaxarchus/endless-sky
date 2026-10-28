@@ -169,6 +169,8 @@ public:
 
 	// Get the price of the given commodity in this system.
 	int Trade(const std::string &commodity) const;
+	// Fork: the price the data sets, before supply moves it (mod API 10).
+	int BasePrice(const std::string &commodity) const;
 	bool HasTrade() const;
 	// Update the economy. Returns the amount of trade goods this system exports.
 	void StepEconomy();

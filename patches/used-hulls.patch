@@ -64,7 +64,7 @@ diff --git a/source/PlayerInfo.cpp b/source/PlayerInfo.cpp
  	ModState::Validate();
  
  	// For old saves, default to the first start condition (the default "Endless Sky" start).
-@@ -5242,6 +5277,22 @@
+@@ -5244,6 +5279,22 @@
  				});
  		}
  		out.EndChild();
@@ -298,7 +298,7 @@ diff --git a/source/ShipyardPanel.h b/source/ShipyardPanel.h
 diff --git a/source/ModHarness.cpp b/source/ModHarness.cpp
 --- a/source/ModHarness.cpp
 +++ b/source/ModHarness.cpp
-@@ -3000,9 +3000,8 @@
+@@ -3135,9 +3135,8 @@
  	const Ship *ship = FindModel(model);
  	if(!context || !ship || !context->player->GetPlanet())
  		return 0;

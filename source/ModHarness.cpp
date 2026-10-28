@@ -39,6 +39,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "Message.h"
 #include "Messages.h"
 #include "Mission.h"
+#include "modding/ModBus.h"
 #include "modding/ModLoaders.h"
 #include "modding/ModState.h"
 #include "Outfit.h"
@@ -73,7 +74,9 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <set>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 using namespace std;
@@ -168,6 +171,11 @@ namespace {
 	map<const Ship *, Tagged> tagged;
 	// Ships the player disabled or destroyed, by tag, not yet counted by a mod.
 	map<string, int> kills;
+	// Mod API 10: the player's ships ship_remove took, kept alive until the next
+	// engine step, so a panel that still points at one (a shop's selection) does
+	// not point at a freed ship.
+	vector<shared_ptr<Ship>> removedShips;
+
 
 	// The galaxy as mods index it: valid, accessible systems in name order. Built
 	// when first asked for, and again after events may have changed it.
@@ -214,9 +222,20 @@ namespace {
 	// When the open hook began. Which mod it is for, and whether its calls act
 	// for that mod, is the loaders' bookkeeping (ModLoaders::BeginHook).
 	chrono::steady_clock::time_point hookStart;
+	// Mod API 10: the open bracket's hook, and its timing sections
+	// (timing_section): the one running, since when, and whether any began.
+	string openHook;
+	string sectionName;
+	bool sectioned = false;
+	chrono::steady_clock::time_point sectionStart;
+	map<tuple<string, string, string>, HookTiming> sectionTimings;
+	// The section names each mod used, by its timed name (ModLoaders::SectionName).
+	map<string, set<string>> sectionNames;
 
 	// The mod loaders, opened the first time the game needs them.
 	ModLoaders loaders;
+	// Mod API 10: the notification bus between their mods.
+	ModBus bus(loaders);
 	bool loadersFound = false;
 	// Read by condition getters, like loadedCount.
 	atomic<int64_t> loaderCount = 0;
@@ -581,6 +600,9 @@ namespace {
 		loaderCount = static_cast<int64_t>(loaders.Count());
 	}
 
+	// Deliver the queued notifications (defined below).
+	void DrainNotifications();
+
 	void Start(PlayerInfo &player)
 	{
 		FindLoaders();
@@ -625,6 +647,8 @@ namespace {
 		loadedCount = loaders.ModCount();
 		Logger::Log("Mod loaders: " + to_string(loaders.Count()) + " loader(s), "
 			+ to_string(loadedCount.load()) + " mod(s) loaded.", Logger::Level::INFO);
+		// What the mods posted in on_load arrives once all of them have loaded.
+		DrainNotifications();
 	}
 
 	// The pilot the mods' world belongs to (ModState::Generation).
@@ -692,6 +716,7 @@ namespace {
 		{
 			CheckPilot(player);
 			hook();
+			DrainNotifications();
 		}
 		context = outer;
 	}
@@ -1204,9 +1229,55 @@ namespace {
 		lostShips.clear();
 		panel = PanelState();
 		numberRequest = NumberRequest();
+		removedShips.clear();
+		// Notifications are not kept from one pilot to the next; who listens is.
+		bus.ClearQueue();
 		ForgetWorld();
 		lastDay = player.GetDate().DaysSinceEpoch();
 		lastSystem = nullptr;
+
+		// Mod API 10: the loaders reset what their mods keep for the last pilot,
+		// before any other hook runs for this one. Nothing the player must start
+		// (a panel, a dialog) can be done from it, whichever hook it runs in.
+		if(!context)
+			return;
+		UI *ui = context->ui;
+		const bool landing = context->landing;
+		context->ui = nullptr;
+		context->landing = false;
+		loaders.Each([](const EsLoader &loader) {
+			if(ES_LOADER_HAS(&loader, pilot_loaded) && loader.pilot_loaded)
+				loader.pilot_loaded();
+		});
+		context->ui = ui;
+		context->landing = landing;
+		// What they posted there arrives after every pilot_loaded has run.
+		DrainNotifications();
+	}
+
+	// Deliver the queued notifications (ModBus::Drain), in the world of the
+	// hook that drains them; nothing the player must start (a panel, a dialog)
+	// can be done from a delivery.
+	void DrainNotifications()
+	{
+		if(state != State::RUNNING || !context || bus.Draining())
+			return;
+		// An empty queue only starts a new count of each mod's posts.
+		if(!bus.Queued())
+		{
+			bus.Drain();
+			return;
+		}
+		UI *ui = context->ui;
+		const bool landing = context->landing;
+		const vector<Ship *> *outfitterShips = context->outfitterShips;
+		context->ui = nullptr;
+		context->landing = false;
+		context->outfitterShips = nullptr;
+		bus.Drain();
+		context->ui = ui;
+		context->landing = landing;
+		context->outfitterShips = outfitterShips;
 	}
 
 	void OpenPanel(const string &mod, const string &title, const string &text, bool chooser)
@@ -1270,6 +1341,8 @@ void ModHarness::Step(PlayerInfo &player, const list<shared_ptr<Ship>> &ships, l
 		}
 
 	context = &current;
+	// In flight, no panel holds a ship that ship_remove took.
+	removedShips.clear();
 	if(state == State::UNSTARTED)
 		Start(player);
 	if(state == State::RUNNING)
@@ -1302,6 +1375,7 @@ void ModHarness::Step(PlayerInfo &player, const list<shared_ptr<Ship>> &ships, l
 			if(loader.step)
 				loader.step(step);
 		});
+		DrainNotifications();
 		inStep = false;
 		EndStepTiming();
 		// The losses kept since the last step's hooks were for these hooks only.
@@ -1335,6 +1409,23 @@ void ModHarness::Shutdown()
 		Logger::Log(summary, Logger::Level::INFO);
 		timings.clear();
 	}
+	// Mod API 10: the sections mods timed within their hooks (timing_section).
+	if(!sectionTimings.empty())
+	{
+		string summary = "Mod hook sections (calls, total, average, slowest):";
+		char line[384];
+		for(const auto &[key, t] : sectionTimings)
+		{
+			const string &section = get<2>(key);
+			snprintf(line, sizeof(line), "\n\t%s %s / %s: %lld calls, %.1f ms, %.1f us, %.2f ms", get<0>(key).c_str(),
+				get<1>(key).c_str(), section.empty() ? "(no section)" : section.c_str(), static_cast<long long>(t.calls),
+				t.totalMs, t.calls ? 1000. * t.totalMs / t.calls : 0., t.maxMs);
+			summary += line;
+		}
+		Logger::Log(summary, Logger::Level::INFO);
+		sectionTimings.clear();
+	}
+	sectionNames.clear();
 	if(frameSteps)
 	{
 		string summary = "Mods, share of each frame over " + to_string(frameSteps) + " engine steps (average, worst step):";
@@ -1368,6 +1459,8 @@ void ModHarness::Shutdown()
 	loadedCount = 0;
 	tagged.clear();
 	kills.clear();
+	removedShips.clear();
+	bus.Reset();
 	stepLosses.clear();
 	lostShips.clear();
 	overlays.clear();
@@ -1400,9 +1493,32 @@ void ModHarness::Landed(PlayerInfo &player)
 		SyncDay(player.GetDate().DaysSinceEpoch());
 		EnterHook(system);
 	}
+	if(state == State::RUNNING)
+		DrainNotifications();
 	context = nullptr;
 	// Taking off replaces the ships; the first step in flight runs on_enter again.
 	lastSystem = nullptr;
+}
+
+
+
+void ModHarness::Saving(const PlayerInfo &player)
+{
+	// Only while the mods run, for the pilot they know (pilot_loaded ran for
+	// it), and never from inside a hook: a mod's own call may make the game save.
+	if(state != State::RUNNING || context || ModState::Generation() != pilotGeneration)
+		return;
+	Context current;
+	// The game's player is never a const object; PlayerInfo saves through a
+	// const method, and the hook may set the mods' data and the player's
+	// conditions, which are then written with the rest.
+	current.player = const_cast<PlayerInfo *>(&player);
+	context = &current;
+	loaders.Each([](const EsLoader &loader) {
+		if(ES_LOADER_HAS(&loader, save) && loader.save)
+			loader.save();
+	});
+	context = nullptr;
 }
 
 
@@ -2308,6 +2424,20 @@ void ES_CALL es_panel_close()
 // the loader) knows which mod is running: a mod name another loader already
 // runs is refused, so its calls do nothing. Only the begin's name counts; the
 // end's is not looked at, and an end without a begin is ignored.
+namespace {
+	// Mod API 10: the open bracket's current timing section ends now.
+	void EndSection(const string &timedMod, chrono::steady_clock::time_point now)
+	{
+		const double ms = chrono::duration<double, milli>(now - sectionStart).count();
+		HookTiming &t = sectionTimings[make_tuple(timedMod, openHook, sectionName)];
+		++t.calls;
+		t.totalMs += ms;
+		t.maxMs = max(t.maxMs, ms);
+	}
+}
+
+
+
 void ES_CALL es_hook_timing(const char *mod, const char *hook, int32_t begin)
 {
 	auto now = chrono::steady_clock::now();
@@ -2315,11 +2445,16 @@ void ES_CALL es_hook_timing(const char *mod, const char *hook, int32_t begin)
 	{
 		loaders.BeginHook(mod ? mod : "");
 		hookStart = now;
+		openHook = hook ? hook : "";
+		sectionName.clear();
+		sectioned = false;
 		return;
 	}
 	if(!loaders.HookOpen())
 		return;
 	const string timedMod = loaders.TimedName();
+	if(sectioned)
+		EndSection(timedMod, now);
 	loaders.EndHook();
 	double ms = chrono::duration<double, milli>(now - hookStart).count();
 	if(inStep)
@@ -3068,6 +3203,327 @@ void ES_CALL es_confirm(const char *text, int32_t token)
 
 
 
+// ---- Mod API 10 ----
+
+namespace {
+	// A system with a market, by true name.
+	const System *TradeSystem(const char *name)
+	{
+		const System *system = FindSystem(name);
+		return system && system->IsValid() ? system : nullptr;
+	}
+
+	// One of the standard commodities, by name.
+	const string *FindCommodity(const char *name)
+	{
+		if(!name || !*name)
+			return nullptr;
+		for(const Trade::Commodity &commodity : GameData::Commodities())
+			if(commodity.name == name)
+				return &commodity.name;
+		return nullptr;
+	}
+
+	int32_t ToInt32(int64_t value)
+	{
+		return static_cast<int32_t>(clamp<int64_t>(value, numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max()));
+	}
+}
+
+
+
+int32_t ES_CALL es_trade_price(const char *system, const char *commodity)
+{
+	ES_CALL_TIMER;
+	const System *at = TradeSystem(system);
+	const string *name = FindCommodity(commodity);
+	if(!context || !at || !name)
+		return -1;
+	return at->Trade(*name);
+}
+
+
+
+int32_t ES_CALL es_trade_base_price(const char *system, const char *commodity)
+{
+	ES_CALL_TIMER;
+	const System *at = TradeSystem(system);
+	const string *name = FindCommodity(commodity);
+	if(!context || !at || !name)
+		return -1;
+	return at->BasePrice(*name);
+}
+
+
+
+int32_t ES_CALL es_commodity_count()
+{
+	ES_CALL_TIMER;
+	return context ? static_cast<int32_t>(GameData::Commodities().size()) : 0;
+}
+
+
+
+const char *ES_CALL es_commodity_name(int32_t k)
+{
+	ES_CALL_TIMER;
+	const vector<Trade::Commodity> &commodities = GameData::Commodities();
+	if(!context || k < 0 || k >= static_cast<int32_t>(commodities.size()))
+		return "";
+	return commodities[k].name.c_str();
+}
+
+
+
+int32_t ES_CALL es_ship_park(const char *uuid, int32_t on)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return 0;
+	// Only a hook the player started, while landed, as the player's own park
+	// buttons (which work only on a planet), and not one of the outfitter's,
+	// whose panel lists the ships it can outfit.
+	if(!context || !context->ui || context->outfitterShips)
+		return 0;
+	PlayerInfo &player = *context->player;
+	Ship *ship = FindPlayerShip(uuid);
+	if(!ship || !player.GetPlanet())
+		return 0;
+	const bool park = (on != 0);
+	if(ship->IsParked() == park)
+		return 1;
+	// The flagship carries the player, and a disabled ship cannot be parked.
+	if(park && (ship->IsDisabled() || ship == player.Flagship()))
+		return 0;
+	player.ParkShip(ship, park);
+	return ship->IsParked() == park;
+}
+
+
+
+int32_t ES_CALL es_ship_remove(const char *uuid)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return 0;
+	// Only a hook the player started, while landed, and not one of the
+	// outfitter's, whose panel holds the ships it has selected.
+	if(!context || !context->ui || context->outfitterShips)
+		return 0;
+	PlayerInfo &player = *context->player;
+	const Planet *planet = player.GetPlanet();
+	Ship *ship = FindPlayerShip(uuid);
+	if(!ship || !planet)
+		return 0;
+	// A ship that carries a mission's cargo or passengers (one parked elsewhere
+	// can) would take them away with it: refused.
+	if(!ship->Cargo().MissionCargo().empty() || !ship->Cargo().PassengerList().empty())
+		return 0;
+	// The flagship goes only if another ship landed here can carry the player.
+	if(ship == player.Flagship())
+	{
+		const auto &ships = player.Ships();
+		bool replaced = any_of(ships.begin(), ships.end(), [ship, planet, &player](const shared_ptr<Ship> &other) {
+			return other && other.get() != ship && !other->IsDestroyed() && !other->IsParked()
+				&& other->CanBeFlagship() && other->GetSystem() == player.GetSystem()
+				&& other->GetPlanet() == planet;
+		});
+		if(!replaced)
+			return 0;
+	}
+	for(const shared_ptr<Ship> &owned : player.Ships())
+		if(owned.get() == ship)
+		{
+			removedShips.push_back(owned);
+			break;
+		}
+	const string name = ship->GivenName();
+	player.DisownShip(ship);
+	// As leaving the shipyard does, and the fleet is listed again when next asked.
+	player.UpdateCargoCapacities();
+	ForgetFleet();
+	Logger::Log("Mod \"" + string(mod) + "\" removed the player's ship \"" + name + "\".", Logger::Level::INFO);
+	return 1;
+}
+
+
+
+int32_t ES_CALL es_ship_parked(const char *uuid)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = FindPlayerShip(uuid);
+	return ship && ship->IsParked();
+}
+
+
+
+void ES_CALL es_outfit_stock_on(int32_t on)
+{
+	ES_CALL_TIMER;
+	if(context)
+		ModState::SetOutfitStockEnabled(on != 0);
+}
+
+
+
+int32_t ES_CALL es_outfit_stock(const char *planet, const char *outfit)
+{
+	ES_CALL_TIMER;
+	const Planet *at = FindPlanet(planet);
+	const Outfit *item = FindOutfit(outfit);
+	if(!context || !at || !item)
+		return -1;
+	return ModState::OutfitStock(at, item);
+}
+
+
+
+void ES_CALL es_set_outfit_stock(const char *planet, const char *outfit, int32_t count)
+{
+	ES_CALL_TIMER;
+	const Planet *at = FindPlanet(planet);
+	const Outfit *item = FindOutfit(outfit);
+	if(context && at && item)
+		ModState::SetOutfitStock(at, item, count < 0 ? -1 : count);
+}
+
+
+
+int32_t ES_CALL es_cargo(const char *commodity)
+{
+	ES_CALL_TIMER;
+	if(!context || !commodity || !*commodity)
+		return 0;
+	const PlayerInfo &player = *context->player;
+	const string name = commodity;
+	// Landed, the cargo is pooled; in flight, it is in the ships' holds.
+	int64_t tons = player.Cargo().Get(name);
+	for(const shared_ptr<Ship> &ship : player.Ships())
+		if(ship && !ship->IsDestroyed() && !ship->IsParked() && ship->GetSystem() == player.GetSystem())
+			tons += ship->Cargo().Get(name);
+	return ToInt32(tons);
+}
+
+
+
+int32_t ES_CALL es_notify(const char *name, const char *payload)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	return mod && context && bus.Post(mod, name, payload);
+}
+
+
+
+void ES_CALL es_listen(const char *pattern)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(mod)
+		bus.Listen(mod, pattern);
+}
+
+
+
+void ES_CALL es_unlisten(const char *pattern)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(mod)
+		bus.Unlisten(mod, pattern);
+}
+
+
+
+namespace {
+	// What this game offers, by name, for api_has and api_features: the one
+	// place every addition to the API registers itself. "call:<EsHost field>"
+	// for each call added since API 9 (tests/modloader/run.sh checks there is one
+	// for each), "on_<hook>" for each EsLoader entry the game calls since API 9,
+	// and a short name for each feature.
+	const set<string> &Features()
+	{
+		static const set<string> features = {
+			// Mod API 10.
+			"api_has", "cargo", "notify", "on_notification", "on_pilot_loaded", "on_save", "outfit_stock",
+			"ship_fractions", "ship_parking", "timing_section", "trade_price",
+			"call:api_features", "call:api_has", "call:cargo", "call:commodity_count", "call:commodity_name",
+			"call:listen", "call:notify", "call:outfit_stock", "call:outfit_stock_on", "call:set_outfit_stock",
+			"call:ship_energy_fraction", "call:ship_fuel_fraction", "call:ship_park", "call:ship_parked",
+			"call:ship_remove", "call:timing_section", "call:trade_base_price", "call:trade_price",
+			"call:unlisten",
+		};
+		return features;
+	}
+}
+
+
+
+int32_t ES_CALL es_api_has(const char *feature)
+{
+	ES_CALL_TIMER;
+	return feature && Features().count(feature);
+}
+
+
+
+const char *ES_CALL es_api_features()
+{
+	ES_CALL_TIMER;
+	static const string list = [] {
+		string text;
+		for(const string &feature : Features())
+			text += (text.empty() ? "" : "\n") + feature;
+		return text;
+	}();
+	return list.c_str();
+}
+
+
+
+void ES_CALL es_timing_section(const char *name)
+{
+	ES_CALL_TIMER;
+	if(!loaders.HookOpen())
+		return;
+	const auto now = chrono::steady_clock::now();
+	const string timedMod = loaders.TimedName();
+	// At most 32 names a mod (the rest are "(other)"), and none with control characters.
+	string section;
+	if(!ModLoaders::SectionName(sectionNames[timedMod], name, section))
+		return;
+	// The time before the first section is timed as "no section".
+	if(!sectioned)
+		sectionStart = hookStart;
+	EndSection(timedMod, now);
+	sectioned = true;
+	sectionName = section;
+	sectionStart = now;
+}
+
+
+
+double ES_CALL es_ship_energy_fraction(int32_t i)
+{
+	ES_CALL_TIMER;
+	// A ship with no battery has no energy to speak of: 0, not Entity's 1.
+	const Ship *ship = GetShip(i);
+	return ship && ship->Attributes().Get("energy capacity") > 0. ? ship->EnergyFraction() : 0.;
+}
+
+
+
+double ES_CALL es_ship_fuel_fraction(int32_t i)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = GetShip(i);
+	return ship && ship->Attributes().Get("fuel capacity") > 0. ? ship->FuelFraction() : 0.;
+}
+
+
+
 namespace {
 	const EsHost &Host()
 	{
@@ -3181,6 +3637,25 @@ namespace {
 		host.map_label = es_map_label;
 		host.map_ring = es_map_ring;
 		host.ship_in_stock = es_ship_in_stock;
+		host.trade_price = es_trade_price;
+		host.trade_base_price = es_trade_base_price;
+		host.commodity_count = es_commodity_count;
+		host.commodity_name = es_commodity_name;
+		host.ship_park = es_ship_park;
+		host.ship_remove = es_ship_remove;
+		host.ship_parked = es_ship_parked;
+		host.outfit_stock_on = es_outfit_stock_on;
+		host.outfit_stock = es_outfit_stock;
+		host.set_outfit_stock = es_set_outfit_stock;
+		host.cargo = es_cargo;
+		host.notify = es_notify;
+		host.listen = es_listen;
+		host.unlisten = es_unlisten;
+		host.api_has = es_api_has;
+		host.api_features = es_api_features;
+		host.timing_section = es_timing_section;
+		host.ship_energy_fraction = es_ship_energy_fraction;
+		host.ship_fuel_fraction = es_ship_fuel_fraction;
 		return host;
 	}
 }

@@ -28,6 +28,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "Hardpoint.h"
 #include "Mission.h"
 #include "ModHarness.h"
+#include "modding/ModState.h"
 #include "Outfit.h"
 #include "Planet.h"
 #include "PlayerInfo.h"
@@ -256,6 +257,10 @@ void OutfitterPanel::DrawItem(const string &name, const Point &point)
 	int stock = 0;
 	if(!outfitter.Has(outfit))
 		stock = max(0, player.Stock(outfit));
+	// Fork: or a count a mod tracks here (mod API 10), after any the player sold here.
+	const int shelf = outfitter.Has(outfit) && ModState::OutfitStockEnabled() ? ModState::OutfitStock(planet, outfit) : -1;
+	if(shelf >= 0)
+		stock = max(0, player.Stock(outfit)) + shelf;
 	int cargo = player.Cargo().Get(outfit);
 	int storage = player.Storage().Get(outfit);
 
@@ -274,6 +279,8 @@ void OutfitterPanel::DrawItem(const string &name, const Point &point)
 		message = "in storage: " + to_string(storage);
 	else if(stock)
 		message = "in stock: " + to_string(stock);
+	else if(!shelf)
+		message = "out of stock";
 	else if(!outfitter.Has(outfit))
 		message = "(not sold here)";
 	if(!message.empty())
@@ -502,6 +509,8 @@ ShopPanel::TransactionResult OutfitterPanel::CanMoveOutfit(OutfitLocation fromLo
 					"You cannot buy this outfit here. It is only being shown in the list because you already "
 					"have one, but this " + planet->Noun() + " does not sell them."};
 			}
+			if(!ModState::OutfitsAvailable(planet, selectedOutfit, 1, player.Stock(selectedOutfit)))
+				return {canSource, canPlace, "This outfit is out of stock here."};
 
 			// Check special unique outfits, if you already have them.
 			// Skip this for speed if this action is not a buy and install action.
@@ -789,9 +798,12 @@ ShopPanel::TransactionResult OutfitterPanel::MoveOutfit(OutfitLocation fromLocat
 							|| cost > player.Accounts().Credits())
 						// Out of stock or money.
 						break;
+					if(!ModState::OutfitsAvailable(planet, selectedOutfit, 1, player.Stock(selectedOutfit)))
+						break;
 
 					// Pay for it and remove it from available stock.
 					player.Accounts().AddCredits(-cost);
+					ModState::OutfitsBought(planet, selectedOutfit, 1, player.Stock(selectedOutfit));
 					player.AddStock(selectedOutfit, -1);
 					cost = player.StockDepreciation().Value(selectedOutfit, day);
 
@@ -810,6 +822,7 @@ ShopPanel::TransactionResult OutfitterPanel::MoveOutfit(OutfitLocation fromLocat
 			CargoHold &storeIn = toCargo ? player.Cargo() : player.Storage();
 			if(!outfitter.Has(selectedOutfit))
 				howManyPer = min(howManyPer, player.Stock(selectedOutfit));
+			howManyPer = ModState::OutfitsAvailable(planet, selectedOutfit, howManyPer, player.Stock(selectedOutfit));
 			if(toCargo)
 			{
 				// Buy up to <modifier> of the selected outfit and place them in fleet cargo.
@@ -835,6 +848,7 @@ ShopPanel::TransactionResult OutfitterPanel::MoveOutfit(OutfitLocation fromLocat
 			{
 				// Buy as many as can be paid for and will fit.
 				player.Accounts().AddCredits(-price);
+				ModState::OutfitsBought(planet, selectedOutfit, howManyPer, player.Stock(selectedOutfit));
 				player.AddStock(selectedOutfit, -howManyPer);
 
 				// Put them into fleet cargo or planetary storage.
@@ -1219,6 +1233,7 @@ void OutfitterPanel::CheckRefill()
 			if(amount > 0)
 			{
 				bool available = outfitter.Has(outfit) || player.Stock(outfit) > 0;
+				available = available && ModState::OutfitsAvailable(planet, outfit, 1, player.Stock(outfit));
 				available = available || player.Cargo().Get(outfit) || player.Storage().Get(outfit);
 				if(available)
 					needed[outfit] += amount;
@@ -1233,6 +1248,7 @@ void OutfitterPanel::CheckRefill()
 		it.second = max(0, it.second - player.Cargo().Get(it.first) - player.Storage().Get(it.first));
 		if(!outfitter.Has(it.first))
 			it.second = min(it.second, max(0, player.Stock(it.first)));
+		it.second = ModState::OutfitsAvailable(planet, it.first, it.second, player.Stock(it.first));
 		cost += player.StockDepreciation().Value(it.first, day, it.second);
 	}
 	if(!needed.empty() && cost < player.Accounts().Credits())
@@ -1274,10 +1290,12 @@ void OutfitterPanel::Refill()
 				neededAmmo -= fromCargo;
 				// Then, buy at reduced (or full) price.
 				int available = outfitter.Has(outfit) ? neededAmmo : min<int>(neededAmmo, max<int>(0, player.Stock(outfit)));
+				available = ModState::OutfitsAvailable(planet, outfit, available, player.Stock(outfit));
 				if(neededAmmo && available > 0)
 				{
 					int64_t price = player.StockDepreciation().Value(outfit, day, available);
 					player.Accounts().AddCredits(-price);
+					ModState::OutfitsBought(planet, outfit, available, player.Stock(outfit));
 					player.AddStock(outfit, -available);
 				}
 				ship->AddOutfit(outfit, available + fromStorage + fromCargo);

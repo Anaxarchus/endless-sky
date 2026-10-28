@@ -66,10 +66,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
  *
  * Threads and timing. Everything runs on the game's main thread. The game calls
  * the loader's entries only from inside its own hooks (an engine step, the
- * planet screen, the map, the outfitter, a mod panel), and the loader calls the
- * host table only from inside those calls (and from es_loader_init, load_mods
- * and shutdown, for the calls that need no world). Outside a hook there is no
- * world: queries answer 0 or "", and writes do nothing.
+ * planet screen, the map, the outfitter, a mod panel, saving the pilot), and
+ * the loader calls the host table only from inside those calls (and from
+ * es_loader_init, load_mods and shutdown, for the calls that need no world).
+ * Outside a hook there is no world: queries answer 0 or "" (or the -1 a call
+ * documents for "unknown"), and writes do nothing.
  *
  * Ownership. Nothing is freed across the boundary.
  *  - A string the host returns stays valid until the next call into the host;
@@ -93,9 +94,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
  * Pilots. When the player makes or loads another pilot (or another save), the
  * game drops everything mods put up for the last one (map overlays, buttons,
  * panels, tagged ships, kills, losses) and does not run the days in between: the
- * loaders see a fresh world, starting with an enter. Mods are loaded once per
- * run of the game (load_mods, and so a mod's on_load), not once per pilot; a
- * mod keeps per-pilot state in its saved data (data / set_data).
+ * loaders see a fresh world, starting with pilot_loaded (API 10) and then an
+ * enter. Mods are loaded once per run of the game (load_mods, and so a mod's
+ * on_load), not once per pilot; a mod keeps per-pilot state in its saved data
+ * (data / set_data), and may flush it there in save (API 10), which runs just
+ * before the game writes the pilot.
  *
  * Ships are named by their index into this step's snapshot of the ships in the
  * current system, 0 <= i < ship_count(). An index is only meaningful within one
@@ -107,7 +110,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include <stdint.h>
 
 /* The mod API version this header describes, and the oldest the game accepts. */
-#define ES_API_VERSION 9
+#define ES_API_VERSION 10
 #define ES_API_MIN_VERSION 9
 
 /* The symbol a loader exports, and its type. */
@@ -174,6 +177,8 @@ typedef struct EsHost {
 	double (ES_CALL *ship_max_hull)(int32_t i);
 	double (ES_CALL *ship_shields)(int32_t i);
 	double (ES_CALL *ship_max_shields)(int32_t i);
+	/* Ship i's energy and fuel, as absolute amounts (not fractions; see
+	 * ship_energy_fraction and ship_fuel_fraction, Mod API 10). */
 	double (ES_CALL *ship_energy)(int32_t i);
 	double (ES_CALL *ship_fuel)(int32_t i);
 	/* Set a level, clamped to [0, max]. */
@@ -402,6 +407,105 @@ typedef struct EsHost {
 	 * not landed or for an unknown model. Always 0 unless the game includes
 	 * used-hull support (the fork's patches/used-hulls.patch). */
 	int32_t (ES_CALL *ship_in_stock)(const char *model);
+
+	/* ---- Mod API 10 ----
+	 * A loader that also runs on an API 9 game checks these with ES_HOST_HAS. */
+
+	/* Trade. Systems and commodities are named by their true names; the
+	 * commodities are the standard ones the trading panel lists. The current
+	 * price of a commodity in a system (what the trading panel charges there
+	 * now), or 0 when the system has no market for it; -1 for an unknown system
+	 * or commodity. */
+	int32_t (ES_CALL *trade_price)(const char *system, const char *commodity);
+	/* The price the system's data sets for it, before supply and demand move it
+	 * (the price with no surplus or shortage). Events that change a system's
+	 * trade change this too: the game keeps no price from before the events.
+	 * 0 when the system has no market for it; -1 for an unknown system or commodity. */
+	int32_t (ES_CALL *trade_base_price)(const char *system, const char *commodity);
+	/* The standard commodities, in the order the trading panel lists them. */
+	int32_t (ES_CALL *commodity_count)(void);
+	const char *(ES_CALL *commodity_name)(int32_t k);
+	/* Only in a hook the player started, only while landed, and not in the
+	 * outfitter's hooks: park (on 1) or unpark (on 0) one of the player's ships,
+	 * by UUID, as the player's own park buttons do, wherever the ship is (a
+	 * ship's own hold, mission cargo included, stays with it, as it does for the
+	 * player's buttons). The flagship and disabled ships cannot be parked. Answers 1 when the ship is now parked (or unparked) as
+	 * asked; 0 for an unknown ship or when it was refused. */
+	int32_t (ES_CALL *ship_park)(const char *ship, int32_t on); /* Mod-scoped. */
+	/* Only in a hook the player started, and only while landed, not in the
+	 * outfitter's hooks: take one of the player's ships out of the fleet for
+	 * good, with everything on it and in its hold, for no money (as disowning it
+	 * does), e.g. because it was sold to someone. A ship carrying a mission's
+	 * cargo or passengers is refused (one parked elsewhere can), and the
+	 * flagship is removed only when another ship landed with the player can take
+	 * its place. Answers 1 when the ship was removed. */
+	int32_t (ES_CALL *ship_remove)(const char *ship); /* Mod-scoped. */
+	/* Whether one of the player's ships, by UUID, is parked. */
+	int32_t (ES_CALL *ship_parked)(const char *ship);
+	/* Outfitter stock, as ship stock (Mod API 9) but for outfits: planets and
+	 * outfits by their true names. Switch tracking on or off for this session;
+	 * the switch is not saved, and loading a pilot turns it off. While it is on,
+	 * an outfitter shows the count of each outfit it sells that a mod tracks
+	 * there, and sells no more than that (after any the player sold there, which
+	 * are bought back first); untracked outfits stay unlimited. Maps and
+	 * licenses are never tracked (they are knowledge, not goods on a shelf). */
+	void (ES_CALL *outfit_stock_on)(int32_t on);
+	/* An outfit's count at a planet, or -1: untracked (unlimited), or an unknown name. */
+	int32_t (ES_CALL *outfit_stock)(const char *planet, const char *outfit);
+	/* Set the count; a negative count untracks the outfit there. Unknown names,
+	 * maps and licenses do nothing. The counts are saved with the pilot. */
+	void (ES_CALL *set_outfit_stock)(const char *planet, const char *outfit, int32_t count);
+	/* How many tons of a commodity (or of any other cargo by name) the player
+	 * carries: in the cargo pooled while landed, and in the holds of their ships
+	 * in the player's system that are not parked. 0 for none or an unknown name. */
+	int32_t (ES_CALL *cargo)(const char *commodity);
+
+	/* The notification bus: mods, under any loader, post notifications to each
+	 * other through the game. A notification has a name (1 to 128 bytes of
+	 * A-Z a-z 0-9 . _ : / -, e.g. "diplomacy.war_declared") and a payload, text of
+	 * up to 64 KiB the game does not read (JSON, by convention). Post one: it is
+	 * queued, never delivered from inside this call, and the game names the
+	 * sender (the bracketed mod). Answers 1 when queued; 0 when refused (a bad
+	 * name or payload) or dropped (the queue holds 1024 notifications and 4 MiB
+	 * of names and payloads, and a mod may post 256 between deliveries), which
+	 * the game logs.
+	 * The game delivers the queue, oldest first, to every mod that listens for
+	 * the name except the sender, in the order of the mods' names, through the
+	 * receiver's loader's `notification` entry: after an engine step's hooks,
+	 * after each hook run from the UI (a button, a panel, the outfitter...), after
+	 * landing, after pilot_loaded, and once the mods have loaded (so what mods
+	 * post in on_load arrives after all have loaded). What mods post during a
+	 * delivery is delivered in the same go, up to 4 rounds or 1024 deliveries;
+	 * the rest waits for the next. What mods post in save is delivered at the
+	 * next of those points, after the pilot is written. The queue is not saved,
+	 * and another pilot empties it. */
+	int32_t (ES_CALL *notify)(const char *name, const char *payload); /* Mod-scoped. */
+	/* Receive notifications by name: an exact name, or a prefix ending in '*'
+	 * ("diplomacy.*"; "*" for all). Listening lasts until unlisten or the end of
+	 * the game, across pilots; a mod has up to 256 patterns. unlisten removes a
+	 * pattern exactly as it was given. */
+	void (ES_CALL *listen)(const char *pattern); /* Mod-scoped. */
+	void (ES_CALL *unlisten)(const char *pattern); /* Mod-scoped. */
+	/* Capability discovery: whether this game offers a feature, by name. Names
+	 * are "call:<EsHost field>" for each call added since API 9 (older calls are
+	 * all in every game that accepts loaders), "on_<hook>" for each EsLoader entry
+	 * the game calls since API 9 ("on_save", "on_pilot_loaded", "on_notification"),
+	 * and short names for features ("notify", "trade_price", "outfit_stock",
+	 * "ship_parking", ...). Works anywhere, also in es_loader_init. */
+	int32_t (ES_CALL *api_has)(const char *feature);
+	/* Every feature name api_has knows, one per line. */
+	const char *(ES_CALL *api_features)(void);
+	/* Split the time of the open hook bracket into named sections, from now until
+	 * the next section or the end of the bracket, for the game's timing reports
+	 * (by mod, hook and section); "" goes back to no section. Up to 64 bytes, no
+	 * control characters (such a name is ignored); a mod's names past its 32nd
+	 * are timed together as "(other)". Does nothing outside a bracket. */
+	void (ES_CALL *timing_section)(const char *name); /* Mod-scoped. */
+	/* Ship i's energy and fuel as fractions of their capacity, 0..1; 0 for a ship
+	 * with no capacity for it. (ship_energy and ship_fuel answer the absolute
+	 * amounts.) */
+	double (ES_CALL *ship_energy_fraction)(int32_t i);
+	double (ES_CALL *ship_fuel_fraction)(int32_t i);
 } EsHost;
 
 /* What a loader offers the game, filled in by es_loader_init. The game passes
@@ -467,6 +571,38 @@ typedef struct EsLoader {
 	/* End every mod. Called once, when the game ends the mods; the library is
 	 * unloaded right after, so nothing of it may keep running. */
 	void (ES_CALL *shutdown)(void);
+
+	/* ---- Mod API 10 ----
+	 * A loader built for API 9 has neither: the game never calls an entry that
+	 * lies beyond the `size` the loader filled. */
+
+	/* The game is about to write the pilot to a file: on taking off, when the
+	 * player quits while landed or opens the load panel (to load another pilot
+	 * or make a snapshot), for the autosave when the player accepts a mission
+	 * marked `autosave` (which may be in flight), and when a conversation
+	 * starts (its snapshot is what a save during it writes). What mods write
+	 * with set_data now goes into that file. The world is there as in any hook
+	 * (queries, set_data, conditions, stock), but no ship snapshot, also in
+	 * flight (ship_count is 0); nothing the player must start is (panels,
+	 * dialogs, buy_ship, ship_park). It is not called from inside another entry
+	 * (a mod's own call may save), nor for a pilot no hook has run for yet
+	 * (pilot_loaded has not run for it), and it may come twice for one save (the
+	 * game also writes a backup). Notifications posted here are delivered after
+	 * the save, at the next drain; those posted in the save before the player
+	 * loads another pilot, or quits, are dropped with the queue. */
+	void (ES_CALL *save)(void);
+	/* Another pilot was made or loaded (see "Pilots" above), or the mods start
+	 * with one: called once for it, in the first hook that runs for it, before
+	 * any day, enter or step for it (and after load_mods, when the mods start
+	 * with it). The world is the new pilot's; nothing the player must start can
+	 * be done here. Loaders reset what their mods keep in memory for the last
+	 * pilot. */
+	void (ES_CALL *pilot_loaded)(void);
+	/* Deliver a notification to mod `mod`, which listens for it (see EsHost's
+	 * notify): its name, payload and the mod that posted it. The game calls it
+	 * only for mods this loader runs, one call per receiver; the loader brackets
+	 * the mod's hook as hook_timing(mod, "on_notification", 1/0), like any other. */
+	void (ES_CALL *notification)(const char *mod, const char *name, const char *payload, const char *sender);
 } EsLoader;
 
 /* The type of es_loader_init. Answers 0 when the loader is ready. */

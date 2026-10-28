@@ -502,7 +502,7 @@ void PlayerInfo::Load(const filesystem::path &path, const shared_ptr<PilotProfil
 			availableMissions.emplace_back(child, &conditions, &visitedSystems, &visitedPlanets);
 		else if(key == "conditions")
 			conditions.Load(child);
-		else if(key == "mod data" || key == "ship stock")
+		else if(key == "mod data" || key == "ship stock" || key == "outfit stock")
 			ModState::Load(child);
 		else if(key == "gifted ships" && child.HasChildren())
 		{
@@ -5080,6 +5080,8 @@ void PlayerInfo::Save(const string &filePath) const
 
 void PlayerInfo::Save(DataWriter &out) const
 {
+	// Fork: the mods flush what they keep into their saved data first (mod API 10).
+	ModHarness::Saving(*this);
 	// Basic player information and persistent UI settings:
 
 	// Pilot information:

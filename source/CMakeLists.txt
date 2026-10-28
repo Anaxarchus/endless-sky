@@ -437,6 +437,8 @@ target_sources(EndlessSkyLib PRIVATE
 	image/SpriteSet.cpp
 	image/SpriteSet.h
 	modding/es_api.h
+	modding/ModBus.cpp
+	modding/ModBus.h
 	modding/ModLoaders.cpp
 	modding/ModLoaders.h
 	modding/ModState.cpp

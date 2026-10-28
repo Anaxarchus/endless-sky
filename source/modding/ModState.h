@@ -20,6 +20,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 class DataNode;
 class DataWriter;
+class Outfit;
 class Planet;
 class Ship;
 
@@ -27,10 +28,11 @@ class Ship;
 
 // What the mods keep with the pilot, kept here rather than in PlayerInfo: each
 // mod's saved text (mod API 6), the shipyard stock mods track (mod API 9) and
-// the notes they show for models out of stock. PlayerInfo clears, loads, saves
-// and validates it with the pilot, in the same blocks and order as always
-// ("mod data", then "ship stock"). Without a mod, all of it stays empty and
-// the shipyards behave as they always have. Main thread only.
+// the notes they show for models out of stock, and the outfitter stock they
+// track (mod API 10). PlayerInfo clears, loads, saves and validates it with the
+// pilot, in the same blocks and order as always ("mod data", "ship stock", then
+// "outfit stock"). Without a mod, all of it stays empty and the shipyards and
+// outfitters behave as they always have. Main thread only.
 class ModState {
 public:
 	// Forget everything: a pilot is about to be made or loaded. Also moves
@@ -38,13 +40,13 @@ public:
 	static void Clear();
 	// A number that changes with every Clear().
 	static uint64_t Generation();
-	// Load a top-level node of the save file, if it is one of ours ("mod data"
-	// or "ship stock"); answers whether it was.
+	// Load a top-level node of the save file, if it is one of ours ("mod data",
+	// "ship stock" or "outfit stock"); answers whether it was.
 	static bool Load(const DataNode &child);
 	// Write our blocks, if there is anything to write.
 	static void Save(DataWriter &out);
-	// Drop stock for planets and models that are not valid; called once a
-	// loaded pilot's events have been applied.
+	// Drop stock for planets, models and outfits that are not valid; called once
+	// a loaded pilot's events have been applied.
 	static void Validate();
 
 	// Text that mods keep with this pilot, by mod and key. An empty value
@@ -68,4 +70,25 @@ public:
 	// to say where it can be ordered. Not saved; an empty note removes it.
 	static const std::string &ShipOrderNote(const Planet *planet, const Ship *model);
 	static void SetShipOrderNote(const Planet *planet, const Ship *model, const std::string &note);
+
+	// Per-planet outfitter stock (mod API 10), as the shipyard stock above: off
+	// unless a mod turns it on (not saved), -1 for untracked (unlimited), and
+	// the counts saved with the pilot.
+	static bool OutfitStockEnabled();
+	static void SetOutfitStockEnabled(bool enabled);
+	static int OutfitStock(const Planet *planet, const Outfit *outfit);
+	// Whether an outfit can be tracked: a defined one that is not a map or a
+	// license (which the outfitter sells as the knowledge they give, not as
+	// things on a shelf).
+	static bool OutfitTrackable(const Outfit *outfit);
+	// A negative count untracks the outfit at that planet; maps and licenses are not tracked.
+	static void SetOutfitStock(const Planet *planet, const Outfit *outfit, int count);
+	// For the outfitter, which sells the outfits the player sold there (its
+	// "in stock", `soldBack` of them) before new ones. How many of `count` can
+	// be bought there now: all of them unless the stock is on and the outfit is
+	// tracked there, and then no more than soldBack plus the tracked count.
+	static int OutfitsAvailable(const Planet *planet, const Outfit *outfit, int count, int soldBack);
+	// The outfitter sold `count` of the outfit, `soldBack` of which it had from
+	// the player: take the rest off the tracked count, if it is tracked.
+	static void OutfitsBought(const Planet *planet, const Outfit *outfit, int count, int soldBack);
 };

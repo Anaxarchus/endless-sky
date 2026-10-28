@@ -18,6 +18,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "../DataNode.h"
 #include "../DataWriter.h"
 #include "../GameData.h"
+#include "../Outfit.h"
 #include "../Planet.h"
 #include "../Ship.h"
 
@@ -83,6 +84,45 @@ namespace {
 	bool shipStockEnabled = false;
 	map<const Planet *, map<const Ship *, int>> shipStock;
 	map<const Planet *, map<const Ship *, string>> shipOrderNotes;
+	// Outfitter stock by planet, then outfit (mod API 10). Only the counts are saved.
+	bool outfitStockEnabled = false;
+	map<const Planet *, map<const Outfit *, int>> outfitStock;
+
+	// A count from a save file, clamped to an int; negative counts are not kept.
+	int SavedCount(double value)
+	{
+		return static_cast<int>(min(value, static_cast<double>(numeric_limits<int>::max())));
+	}
+
+	// Stock by planet, then item, written as a block of the save file sorted by
+	// name, if it holds anything.
+	template <class Item, class NameOf>
+	void SaveStock(DataWriter &out, const string &key, const map<const Planet *, map<const Item *, int>> &stock,
+		NameOf nameOf)
+	{
+		if(stock.empty())
+			return;
+		map<string, map<string, int>> sorted;
+		for(const auto &[stockPlanet, items] : stock)
+			for(const auto &[item, count] : items)
+				sorted[stockPlanet->TrueName()][nameOf(item)] = count;
+
+		out.Write(key);
+		out.BeginChild();
+		{
+			for(const auto &[planetName, items] : sorted)
+			{
+				out.Write(planetName);
+				out.BeginChild();
+				{
+					for(const auto &[itemName, count] : items)
+						out.Write(itemName, count);
+				}
+				out.EndChild();
+			}
+		}
+		out.EndChild();
+	}
 	// Bumped by Clear(): which pilot the state belongs to.
 	uint64_t generation = 0;
 }
@@ -95,6 +135,8 @@ void ModState::Clear()
 	shipStockEnabled = false;
 	shipStock.clear();
 	shipOrderNotes.clear();
+	outfitStockEnabled = false;
+	outfitStock.clear();
 	++generation;
 }
 
@@ -130,8 +172,24 @@ bool ModState::Load(const DataNode &child)
 			{
 				const Ship *model = GameData::Ships().Find(great.Token(0));
 				if(model && great.Size() >= 2 && great.Value(1) >= 0.)
-					shipStock[stockPlanet][model] = static_cast<int>(
-						min(great.Value(1), static_cast<double>(numeric_limits<int>::max())));
+					shipStock[stockPlanet][model] = SavedCount(great.Value(1));
+			}
+		}
+		return true;
+	}
+	if(key == "outfit stock")
+	{
+		// As ship stock: unknown names are dropped here, undefined ones in Validate().
+		for(const DataNode &grand : child)
+		{
+			const Planet *stockPlanet = GameData::Planets().Find(grand.Token(0));
+			if(!stockPlanet)
+				continue;
+			for(const DataNode &great : grand)
+			{
+				const Outfit *outfit = GameData::Outfits().Find(great.Token(0));
+				if(outfit && OutfitTrackable(outfit) && great.Size() >= 2 && great.Value(1) >= 0.)
+					outfitStock[stockPlanet][outfit] = SavedCount(great.Value(1));
 			}
 		}
 		return true;
@@ -156,30 +214,9 @@ void ModState::Save(DataWriter &out)
 		out.EndChild();
 	}
 
-	// Shipyard stock that mods keep with this pilot, sorted by name.
-	if(!shipStock.empty())
-	{
-		map<string, map<string, int>> sorted;
-		for(const auto &[stockPlanet, models] : shipStock)
-			for(const auto &[model, count] : models)
-				sorted[stockPlanet->TrueName()][model->VariantName()] = count;
-
-		out.Write("ship stock");
-		out.BeginChild();
-		{
-			for(const auto &[planetName, models] : sorted)
-			{
-				out.Write(planetName);
-				out.BeginChild();
-				{
-					for(const auto &[modelName, count] : models)
-						out.Write(modelName, count);
-				}
-				out.EndChild();
-			}
-		}
-		out.EndChild();
-	}
+	// Shipyard and outfitter stock that mods keep with this pilot, sorted by name.
+	SaveStock(out, "ship stock", shipStock, [](const Ship *model) { return model->VariantName(); });
+	SaveStock(out, "outfit stock", outfitStock, [](const Outfit *outfit) { return outfit->TrueName(); });
 }
 
 
@@ -196,6 +233,16 @@ void ModState::Validate()
 			erase_if(it->second, [](const pair<const Ship *const, int> &entry) { return !entry.first->IsValid(); });
 		if(!it->first->IsValid() || it->second.empty())
 			it = shipStock.erase(it);
+		else
+			++it;
+	}
+	// The same for outfitter stock, and outfits that are no longer defined.
+	for(auto it = outfitStock.begin(); it != outfitStock.end(); )
+	{
+		if(it->first->IsValid())
+			erase_if(it->second, [](const pair<const Outfit *const, int> &entry) { return !entry.first->IsDefined(); });
+		if(!it->first->IsValid() || it->second.empty())
+			it = outfitStock.erase(it);
 		else
 			++it;
 	}
@@ -325,4 +372,85 @@ void ModState::SetShipOrderNote(const Planet *planet, const Ship *model, const s
 		return;
 	}
 	shipOrderNotes[planet][model] = note;
+}
+
+
+
+bool ModState::OutfitStockEnabled()
+{
+	return outfitStockEnabled;
+}
+
+
+
+void ModState::SetOutfitStockEnabled(bool enabled)
+{
+	outfitStockEnabled = enabled;
+}
+
+
+
+bool ModState::OutfitTrackable(const Outfit *outfit)
+{
+	return outfit && outfit->IsDefined() && !outfit->Get("map") && !outfit->TrueName().ends_with(" License");
+}
+
+
+
+int ModState::OutfitStock(const Planet *planet, const Outfit *outfit)
+{
+	auto it = outfitStock.find(planet);
+	if(it == outfitStock.end())
+		return -1;
+	auto oit = it->second.find(outfit);
+	return oit == it->second.end() ? -1 : oit->second;
+}
+
+
+
+void ModState::SetOutfitStock(const Planet *planet, const Outfit *outfit, int count)
+{
+	// Never track outfits that are not defined, which would be saved without a
+	// name, nor maps and licenses.
+	if(!planet || !outfit || !OutfitTrackable(outfit))
+		return;
+	if(count < 0)
+	{
+		auto it = outfitStock.find(planet);
+		if(it != outfitStock.end())
+		{
+			it->second.erase(outfit);
+			if(it->second.empty())
+				outfitStock.erase(it);
+		}
+		return;
+	}
+	outfitStock[planet][outfit] = count;
+}
+
+
+
+int ModState::OutfitsAvailable(const Planet *planet, const Outfit *outfit, int count, int soldBack)
+{
+	const int tracked = outfitStockEnabled ? OutfitStock(planet, outfit) : -1;
+	if(tracked < 0 || count <= 0)
+		return count;
+	const int64_t most = static_cast<int64_t>(max(0, soldBack)) + tracked;
+	return static_cast<int>(min<int64_t>(count, most));
+}
+
+
+
+void ModState::OutfitsBought(const Planet *planet, const Outfit *outfit, int count, int soldBack)
+{
+	if(!outfitStockEnabled || count <= 0)
+		return;
+	auto it = outfitStock.find(planet);
+	if(it == outfitStock.end())
+		return;
+	auto oit = it->second.find(outfit);
+	if(oit == it->second.end())
+		return;
+	const int fromShelf = count - min(count, max(0, soldBack));
+	oit->second = max(0, oit->second - fromShelf);
 }

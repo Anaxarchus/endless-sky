@@ -31,14 +31,16 @@ loader() {
 		-o "$out" "$HERE/test_loader.c"
 }
 loader "$RES/a_alpha$EXT" '-DTL_NAME="alpha (resources)"' '-DTL_MOD="alpha_mod"'
-loader "$CFG/a_alpha$EXT" '-DTL_NAME="alpha (config)"' '-DTL_MOD="alpha_mod"' -DTL_MISBEHAVE
+loader "$CFG/a_alpha$EXT" '-DTL_NAME="alpha (config)"' '-DTL_MOD="alpha_mod"' -DTL_MISBEHAVE '-DTL_LISTEN="test.*"'
 loader "$RES/b_newer$EXT" '-DTL_NAME="newer"' '-DTL_MOD="newer_mod"' '-DTL_VERSION=(ES_API_VERSION+1)' \
 	'-DTL_SIZE=(sizeof(EsLoader)+16)'
 loader "$RES/b_old_version$EXT" '-DTL_NAME="old version"' '-DTL_VERSION=(ES_API_MIN_VERSION-1)'
 loader "$RES/c_small$EXT" '-DTL_NAME="small"' '-DTL_SIZE=8'
 loader "$RES/d_declines$EXT" '-DTL_NAME="declines"' '-DTL_RESULT=3'
 loader "$RES/e_no_init$EXT" -DTL_NO_INIT
-loader "$CFG/z_beta$EXT" '-DTL_NAME="beta"' '-DTL_MOD="beta_mod"'
+loader "$CFG/z_beta$EXT" '-DTL_NAME="beta"' '-DTL_MOD="beta_mod"' '-DTL_LISTEN="test.ping"'
+# A loader built for mod API 9, with junk where API 10's entries are.
+loader "$RES/x_api9$EXT" '-DTL_NAME="api 9"' '-DTL_MOD="api9_mod"' -DTL_API9
 # A non-ASCII file name: opened through its UTF-8 path.
 loader "$CFG/y_ünï$EXT" '-DTL_NAME="unicode"' '-DTL_MOD="unicode_mod"'
 echo "not a library" > "$RES/f_junk$EXT"
@@ -47,7 +49,7 @@ echo "not a loader" > "$RES/notes.txt"
 host() {
 	out=$1; dir=$2; werror=${3:--Werror}
 	"$CXX" -std=c++20 -Wall -Wextra -pedantic-errors -Wold-style-cast $werror \
-		-I"$dir" -I"$SDL_INCLUDE" -o "$out" "$HERE/test_host.cpp" "$dir/ModLoaders.cpp" $LDL
+		-I"$dir" -I"$SDL_INCLUDE" -o "$out" "$HERE/test_host.cpp" "$dir/ModLoaders.cpp" "$dir/ModBus.cpp" $LDL
 }
 host "$OUT/test-host" "$ROOT/source/modding"
 
@@ -62,6 +64,17 @@ for field in $(sed -n '/^typedef struct EsHost {/,/^} EsHost;/p' "$ROOT/source/m
 done
 fields=$(sed -n '/^typedef struct EsHost {/,/^} EsHost;/p' "$ROOT/source/modding/es_api.h" | grep -c '(ES_CALL \*')
 echo "host table: $fields functions, $missing not set by the game"
+# Every call added since API 9 must be registered for api_has, as "call:<field>".
+unregistered=0
+for field in $(sed -n '/^typedef struct EsHost {/,/^} EsHost;/p' "$ROOT/source/modding/es_api.h" \
+		| sed -n '/---- Mod API 10 ----/,$p' | sed -n 's/.*(ES_CALL \*\([a-z_0-9]*\))(.*/\1/p'); do
+	if ! grep -q "\"call:$field\"" "$ROOT/source/ModHarness.cpp"; then
+		echo "FAIL: ModHarness.cpp's Features() does not register call:$field"
+		unregistered=$((unregistered + 1))
+	fi
+done
+[ "$unregistered" -eq 0 ] && echo "features: every call since API 9 is registered"
+missing=$((missing + unregistered))
 
 status=0
 "$OUT/test-host" "$OUT/resources" "$OUT/config" || status=1
@@ -76,8 +89,8 @@ if [ "$MUTATE" != 0 ]; then
 		dir="$OUT/mutant$m"
 		mkdir -p "$dir"
 		cp "$ROOT/source/modding/ModLoaders.cpp" "$ROOT/source/modding/ModLoaders.h" \
-			"$ROOT/source/modding/es_api.h" "$dir/"
-		sed -i.bak -e 's|#include "\.\./|#include "'"$ROOT"'/source/|' "$dir/ModLoaders.cpp"
+			"$ROOT/source/modding/ModBus.cpp" "$ROOT/source/modding/ModBus.h" "$ROOT/source/modding/es_api.h" "$dir/"
+		sed -i.bak -e 's|#include "\.\./|#include "'"$ROOT"'/source/|' "$dir/ModLoaders.cpp" "$dir/ModBus.cpp"
 		if [ $m = 1 ]; then
 			sed -i.bak -e 's/if(!HookOpen() || !bracket.owned || current == NONE)/if(!bracket.open)/' \
 				-e 's/if(it == owners.end() || it->second != current)/if(false \&\& it == owners.end())/' \
