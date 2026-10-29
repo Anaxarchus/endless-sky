@@ -91,7 +91,7 @@ A bracket lasts at most until the game's call into the loader returns. If a mod 
 
 When the player makes or loads another pilot (or another save of the same pilot), the game drops everything the mods put up for the last one: map overlays and side-panel sections, planet and outfitter buttons, the open panel, tagged ships, kills and losses, and the queued notifications. It does not run the days in between. The loaders see a fresh world, starting with `pilot_loaded` (API 10) and then an `enter`. Mods are loaded once per run of the game (`load_mods`, and with it a mod's `on_load`), not once per pilot, so a mod should keep per-pilot state in its saved data (`data` and `set_data`), which is saved and loaded with the pilot.
 
-The game keeps what mods store with a pilot in `source/modding/ModState`, not in `PlayerInfo`. That covers each mod's saved data, the shipyard and outfitter stock mods track, and the notes shown for models that are out of stock. The save file holds it in `mod data`, `ship stock` and `outfit stock` blocks, and a pilot saved without mods has none of them. Stock tracking (both kinds) is switched off whenever a pilot is loaded.
+The game keeps what mods store with a pilot in `source/modding/ModState`, not in `PlayerInfo`. That covers each mod's saved data, the shipyard and outfitter stock mods track, the notes shown for models that are out of stock, and (API 11) the outfits and ship models mods defined. The save file holds it in `mod data`, `ship stock`, `outfit stock` and `runtime definitions` blocks, and a pilot saved without mods has none of them. Stock tracking (both kinds) is switched off whenever a pilot is loaded.
 
 `ship_in_stock` always answers 0 unless the game includes used-hull support, which the fork keeps as an optional patch (`patches/used-hulls.patch`).
 
@@ -105,12 +105,12 @@ The game keeps what mods store with a pilot in `source/modding/ModState`, not in
 
 ## Versions
 
-`ES_API_VERSION` is the mod API number (currently 10; `ES_API_MIN_VERSION` is still 9). Both tables only grow by appending fields at the end. Existing fields never change, move or go away, so an older table is a prefix of a newer one. Each table's `size` says how much of it exists. Check `ES_HOST_HAS(host, field)` or `ES_LOADER_HAS(loader, field)` before using a field that is newer than the version you required.
+`ES_API_VERSION` is the mod API number (currently 11; `ES_API_MIN_VERSION` is still 9). Both tables only grow by appending fields at the end. Existing fields never change, move or go away, so an older table is a prefix of a newer one. Each table's `size` says how much of it exists. Check `ES_HOST_HAS(host, field)` or `ES_LOADER_HAS(loader, field)` before using a field that is newer than the version you required.
 
 - The game accepts any loader whose `version` is at least `ES_API_MIN_VERSION`, including versions newer than the game's. It uses `min(loader->size, sizeof(EsLoader))` bytes of the loader's table and ignores fields it does not know.
 - The loader is responsible for checking `host->version` and `ES_HOST_HAS` for everything it needs, and for answering nonzero from `es_loader_init` when the game is too old for it. It must not write more of `EsLoader` than the `size` the game passed in.
 - The game rejects a loader whose `version` is below `ES_API_MIN_VERSION`, or whose `size` does not cover the API 9 table.
-- `api_has(feature)` and `api_features()` (API 10) name what the game offers, so a loader or a mod can ask for a feature instead of a version: `"call:<field>"` for each `EsHost` call added since API 9, `"on_<hook>"` for each loader entry the game calls since API 9, and short names (`"notify"`, `"trade_price"`, `"outfit_stock"`, `"ship_parking"`, `"cargo"`, `"timing_section"`, `"ship_fractions"`). They are registered in one place, `Features()` in `ModHarness.cpp`, and `tests/modloader/run.sh` fails when a call added since API 9 is not registered there.
+- `api_has(feature)` and `api_features()` (API 10) name what the game offers, so a loader or a mod can ask for a feature instead of a version: `"call:<field>"` for each `EsHost` call added since API 9, `"on_<hook>"` for each loader entry the game calls since API 9, and short names (`"notify"`, `"trade_price"`, `"outfit_stock"`, `"ship_parking"`, `"cargo"`, `"timing_section"`, `"ship_fractions"`; API 11: `"runtime_definitions"`, `"outfit_transfer"`, `"ship_reactivate"`). They are registered in one place, `Features()` in `ModHarness.cpp`, and `tests/modloader/run.sh` fails when a call added since API 9 is not registered there.
 
 ### Changing the API
 
@@ -165,6 +165,74 @@ Posts are queued, never delivered synchronously. The harness drains the queue af
 ### Timing sections and fractions
 
 `timing_section(name)` splits the open bracket's time into named sections; the summary at exit then has a row per mod, hook and section. A name with a control character is ignored, and a mod's names past its 32nd are timed together as `(other)` (`ModLoaders::SectionName`), so the table cannot grow without end. `ship_energy_fraction` and `ship_fuel_fraction` answer 0..1, and 0 for a ship with no capacity for it, where `ship_energy` and `ship_fuel` answer absolute amounts (`Ship::EnergyLevel` and `FuelLevel`).
+
+## Mod API 11
+
+API 11 lets mods create outfits and ship models while the game runs, make variants of any existing one, swap outfits on the player's ships, move outfits in and out of the player's cargo and storage, and wake disabled ships up. The calls are appended to `EsHost` in this order: `define`, `define_outfit_variant`, `define_ship_variant`, `defined`, `ship_replace_outfit`, `outfit_take`, `outfit_give`, then `ship_distance`, `ship_x`, `ship_y` and `ship_reactivate`. The first seven are mod-scoped; the ship queries and `ship_reactivate` act on this step's ship snapshot, like the other ship calls. `api_has` knows each as `"call:<name>"`, and the features `"runtime_definitions"`, `"outfit_transfer"` and `"ship_reactivate"`.
+
+### Runtime definitions
+
+`define(text)` takes top-level `outfit "<name>"`, `ship "<name>"` and `ship "<base>" "<name>"` nodes in data-file syntax. `define_outfit_variant(name, base, changes)` copies an outfit (game data, plugin or runtime) and applies `changes` (an outfit node's children) on top; `define_ship_variant(name, base, changes)` loads `ship "<base>" "<name>"` with `changes` as its children, as the game loads a variant. `defined(kind, name)` answers 0 (unknown), 1 (game data or a plugin) or 2 (defined at runtime for this pilot).
+
+A node is refused, and logged, when the game data or a plugin defines its name, another mod defined it for this pilot, it does not parse, or (for a ship) it installs an outfit that is not defined. The same mod defining the same name with the same text again is a no-op that counts as defined; other text is refused: definitions are immutable for the pilot, and a new version needs a new name. "The same text" is compared after a round trip through `DataWriter`, so spacing and quoting do not matter.
+
+The code is in `source/modding/RuntimeDefinitions.cpp`. It keeps, for the current pilot, an ordered list of records (the owner mod, the kind, the name, and either the node it loaded or the base and the changes), and `ModState` clears, loads and saves it with the rest of the mods' state. In the save it is a block before the ships:
+
+```
+"runtime definitions"
+	define my_mod
+		outfit "Shield Core"
+			...
+	"outfit variant" my_mod "Heavy Laser Mk2" "Heavy Laser"
+		weapon
+			"shield damage" 30
+	"ship variant" my_mod "Barge X" "Star Barge"
+		"display name" "Barge X"
+```
+
+A variant is saved as (name, base, changes), so it is derived from its base again on load, whatever the base is then.
+
+#### Load order and pointer stability
+
+The game's sets (`Set<T>`, a `std::map`) never move an object, and `Set::Get` makes an empty placeholder for any name it does not hold, which every part of a save uses to name outfits and ships. So a definition is always loaded into the set's own object of that name, never a new one: a placeholder an earlier lookup made becomes the real thing, and every pointer to it stays valid. Nothing is ever erased (other parts of the game may hold pointers; `GameData::Revert` does not touch outfits or ships either).
+
+`PlayerInfo::Save` writes the block before the ships (the one line the fork adds there), and `PlayerInfo::Load` applies it as soon as it reads it. That is before everything that needs the definitions complete, which I checked one by one:
+
+- the player's ships (`Ship(node)`, which looks outfits up by pointer, and `FinishLoading(false)` after `ApplyChanges`, which looks the model up by name for its explosion, display names and thumbnail);
+- missions, whose NPC ships are loaded **and finished** inside `Mission`/`NPC` loading (`NPC::Load` calls `FinishLoading(false)` there, so a model must be complete by then), and whose actions name outfits;
+- cargo, planetary storage, outfitter stock, depreciation records (`Ships().Get`/`Outfits().Get`, by pointer);
+- `mod data`, `ship stock` and `outfit stock`, which use `Find` and drop unknown names, and `ModState::Validate`, which drops undefined ones;
+- `changes` (events), applied in `ApplyChanges` after the whole file is read, which may put runtime ships in shipyards;
+- `GameData::CheckReferences`, which names (and warns about) placeholders that were never defined: none, for what the block defines.
+
+A save whose block comes after its ships (written by hand) still loads, since the objects are filled in place, except for missions' NPCs finished before it. A save without the block loads exactly as before.
+
+#### Another pilot
+
+Loading or making another pilot (`ModState::Clear`) makes every record stale: its object stays in the set (objects cannot be freed safely), but it is no longer "defined for this pilot": `defined` answers 0, and the harness's outfit and model lookups (`FindOutfit`, `FindModel`) do not see it, so a mod cannot give it to the new pilot. When the new pilot's block, or a mod, defines the name again, the object is loaded anew if the text differs (a ship is reset to `Ship()` first; an outfit is replaced by a freshly loaded one) and left alone if it is the same; a variant is derived again if its base was. A record that cannot be loaded (its base came from a plugin that was removed) is kept and saved again, and its object is emptied, so the save behaves as with a removed plugin.
+
+#### What Outfit and Ship need after Load
+
+- **Outfit**: nothing after `Outfit::Load`; it links its weapon's ammunition and its `ammo`/`linked` outfits by pointer, and adds a jump drive's range to `GameData`'s neighbor distances itself. That range only takes effect after `GameData::UpdateSystems`, which loading a pilot runs (`ApplyChanges`) and `define` runs when it defines such an outfit. Weapons need nothing either: their damage totals are computed lazily, and the cached lifetime is reset for variants.
+- **Outfit variants** copy the base and load the changes on top, as `Outfit::Load` supports (a `weapon` block loads on top of a copy of the weapon). Three things `Load` adds to rather than replaces are handled: a changed `description` replaces the base's, a changed `display name` gets its own plural (unless `plural` is given), and the weapon's live effects, which `Weapon::Load` converts from counts into per-frame chances, are not converted twice. List-like weapon keys (effects, submunitions) add to the base's. `RuntimeDefinitionsDetail` is a friend of `Outfit`, `Weapon` and `Ship` for this (one line in each header).
+- **Ship models** need `FinishLoading(true)`, as `UniverseObjects::FinishLoading` gives every model: it sums the outfits into the attributes, copies a variant's missing parts from its base (sprite, hardpoints, outfits, engines...), fills in the thumbnail from the sprite, and calibrates the caches. As the game data does, a pilot's block loads every outfit and ship first and then finishes the ships, in order (so a base is finished before its variants); and if anything was loaded again, every runtime model is finished again, since a model sums its outfits when it finishes. `define` defines a text's outfits before its ships, so a ship may install an outfit defined later in the same text. Sprites and thumbnails are named by path, and are there if the game's images have them.
+- **Caches**: nothing in `GameData` indexes outfits or ships by category: the outfitter and the shipyard build their catalogs from the whole set when they open, so an open shop shows a new definition only when it is opened again. An outfit whose category is not in the game's category list is not shown in the outfitter, as with data. The harness forgets its shipyard models, fleet strengths and defense fleets after a definition.
+
+### Replacing outfits
+
+`ship_replace_outfit(ship, from, to, count)` works like the outfitter would, without a shop: on one of the player's ships (UUID) at the planet where the player is landed, one at a time, it uninstalls a removable `from` (integrated outfits are not) and installs `to`, only when the ship's attributes allow both changes together: `Outfit::CanAdd` with the old one out and the new one in, which covers outfit, weapon, engine and cargo space, gun ports and turret mounts (a weapon takes one), `installable`, required crew, and every other attribute with a minimum. The armament puts a weapon in a free hardpoint of its kind. Crew are adjusted and the ship recharged as the outfitter does, and the cargo capacities updated. Nothing is paid; the new outfit has no depreciation record, so it sells as a used one. Maps and licenses cannot be installed. Only from a hook the player started, while landed, and not from the outfitter's hooks (its panel holds what it shows of the ships).
+
+### Moving outfits
+
+`outfit_take(outfit, count, from)` and `outfit_give(outfit, count, to)` move outfits in and out of `"cargo"` (the pooled cargo while landed; in flight, taking is from the holds of the player's ships in the system that are not parked, as `cargo` counts them, and giving is into the flagship's hold) and `"storage"` (the planet's storage, landed only); `"any"` takes from cargo, then storage. Installed outfits are never taken. Giving ignores free space, as missions' gifts do. Maps and licenses cannot be given. Both work in any hook with a world, also `on_enter` on landing and `on_step`, but not in `save`.
+
+### Waking ships up
+
+`ship_distance(i)`, `ship_x(i)` and `ship_y(i)` answer a ship's distance from the flagship (-1 without a flagship in the system) and its position. `ship_reactivate(i, government, personality)` brings a disabled ship that is not the player's back: crew up to what it needs (at least 1), hull up to 10% of its maximum above its disabled threshold (never above the maximum), shields as they are, and the disabled flag cleared (`ModHarness::Reactivate`, as a friendly boarding repairs a ship, plus crew). A government takes it and its carried ships over; a personality replaces its own. AI and missions treat `derelict` ships specially (`AI.cpp` does not ask for help for them and holds a stranded derelict still, and `NPC::HasSucceeded` counts a derelict as immobile), so a reactivated ship always loses the `derelict` flag, also when its personality is kept, and the AI then flies it as any other ship. It keeps its tag; the harness's tag strengths are recounted.
+
+### Testing API 11
+
+`tests/modloader/api11/run.sh` runs the game itself on an integration test (`api11_tests.txt`, headless with `xvfb-run`) with a test loader (`api11_loader.c`) in a scratch config folder. The test loads a hand-made save whose `runtime definitions` block defines a runtime outfit, a variant of a game outfit, a runtime ship model and a variant of it, with a flagship of that model carrying those outfits; the loader checks the definitions, refusals, idempotence, variants and moving outfits when the pilot loads, replaces outfits from its planet button, and in flight wakes a placed derelict up, which must then fly. The test takes off (which saves), loads that save again and checks it all still holds. The script then checks that the saved block comes before the ships, and that a fresh game without the loader loads the save (`--parse-save`) with no errors.
 
 ## Testing
 

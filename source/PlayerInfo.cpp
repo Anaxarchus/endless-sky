@@ -504,6 +504,9 @@ void PlayerInfo::Load(const filesystem::path &path, const shared_ptr<PilotProfil
 			conditions.Load(child);
 		else if(key == "mod data" || key == "ship stock" || key == "outfit stock")
 			ModState::Load(child);
+		// Fork: mod API 11. Defined here, before the ships and the rest that name them.
+		else if(key == "runtime definitions")
+			ModState::LoadDefinitions(child, &conditions);
 		else if(key == "gifted ships" && child.HasChildren())
 		{
 			for(const DataNode &grand : child)
@@ -5171,6 +5174,9 @@ void PlayerInfo::Save(DataWriter &out) const
 		out.Write("max escort crew", *maxEscortCrew);
 	if(adminCap.has_value())
 		out.Write("admin cap", *adminCap);
+
+	// Fork: outfits and ships mods defined (mod API 11), before anything names them.
+	ModState::SaveDefinitions(out);
 
 	// Records of things you own:
 	out.Write();

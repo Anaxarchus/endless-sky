@@ -1,0 +1,196 @@
+# Copyright (c) 2026 by Anaxarchus
+#
+# Endless Sky is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later version.
+#
+# Endless Sky is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <https://www.gnu.org/licenses/>.
+
+# Mod API 11, run by tests/modloader/api11/run.sh with api11_loader.c as the
+# config folder's mod loader. Not part of the ordinary integration tests: it
+# needs that loader.
+
+# A pilot saved with outfits and ship models a mod defined at runtime: its
+# flagship is a runtime model, with a runtime outfit and a runtime variant of a
+# game outfit installed, and the variant in its cargo.
+test-data "API11 Save"
+	category "savegame"
+	contents
+		pilot Api Eleven
+		date 16 11 3013
+		system "Terra Incognita"
+		planet Ruin
+		clearance
+		"runtime definitions"
+			define api11_test
+				outfit "API11 Core"
+					category "Systems"
+					cost 1000
+					mass 10
+					"outfit space" -10
+					"shield generation" 2
+			"outfit variant" api11_test "API11 Battery" "LP036a Battery Pack"
+				"energy capacity" 12345
+				"display name" "API11 Battery"
+			define api11_test
+				ship "API11 Hull"
+					sprite "ship/star barge"
+					thumbnail "thumbnail/star barge"
+					attributes
+						category "Light Freighter"
+						cost 190000
+						mass 70
+						bunks 3
+						"cargo space" 50
+						drag 2.1
+						"engine capacity" 40
+						"fuel capacity" 300
+						"heat dissipation" 0.8
+						hull 1000
+						"outfit space" 130
+						"required crew" 1
+						shields 600
+						"weapon capacity" 20
+						thrust 25
+						turn 250
+						"energy generation" 10
+					outfits
+						Hyperdrive
+						"API11 Core"
+					engine -9 38 1
+					engine 9 38 1
+			"ship variant" api11_test "API11 Hull Mk2" "API11 Hull"
+				"display name" "API11 Hull Mk2"
+		ship "API11 Hull"
+			name "Eleven"
+			sprite "ship/star barge"
+			attributes
+				category "Light Freighter"
+				cost 190000
+				mass 70
+				bunks 3
+				"cargo space" 50
+				drag 2.1
+				"engine capacity" 40
+				"fuel capacity" 300
+				"heat dissipation" 0.8
+				hull 1000
+				"outfit space" 130
+				"required crew" 1
+				shields 600
+				"weapon capacity" 20
+				thrust 25
+				turn 250
+				"energy generation" 10
+			outfits
+				Hyperdrive
+				"API11 Core"
+				"API11 Battery"
+			crew 1
+			fuel 300
+			shields 600
+			hull 1000
+			position 0 0
+			engine -9 38 1
+			engine 9 38 1
+			system "Terra Incognita"
+			planet Ruin
+		cargo
+			outfits
+				"API11 Battery" 3
+		account
+			credits 100000000
+			score 400
+			history
+		visited "Terra Incognita"
+		"visited planet" Ruin
+		changes
+			system "Terra Incognita"
+				fleet "API11 TEST: drifters" 5
+		conditions
+			"Ruin: Landing: offered"
+
+
+# A derelict that can fly once it wakes up.
+ship "API11 Drifter"
+	sprite "ship/star barge"
+	attributes
+		category "Light Freighter"
+		cost 1000
+		mass 50
+		bunks 2
+		drag 2
+		hull 2000
+		shields 500
+		"required crew" 1
+		thrust 40
+		turn 300
+		"energy generation" 10
+		"energy capacity" 100
+		"fuel capacity" 300
+	engine -9 38 1
+	engine 9 38 1
+
+fleet "API11 TEST: drifters"
+	personality derelict
+	government "Pirate"
+	variant
+		"API11 Drifter"
+
+
+test "API 11"
+	status active
+	description "Mod API 11: runtime definitions saved and loaded with the pilot, outfits replaced and moved, and a derelict woken up."
+	sequence
+		inject "API11 Save"
+		call "Load First Savegame"
+		# The loader checked the definitions and moved outfits when the pilot loaded.
+		assert
+			"api11 loads" == 1
+			"api11 fail" == 0
+			"api11 pass" > 0
+			"ship model (all): API11 Hull" == 1
+			"outfit: API11 Core" == 1
+			"outfit: API11 Battery" == 4
+			"outfit: API11 Plate" == 0
+		# The mod's planet button: replace outfits.
+		input
+			key k
+		assert
+			"api11 replaced" == 1
+			"api11 fail" == 0
+			"outfit: API11 Core" == 0
+			"outfit: API11 Core Plus" == 1
+			"outfit: API11 Plate" == 1
+			"outfit: API11 Battery" == 3
+		# Taking off saves the pilot.
+		call "Depart"
+		assert
+			"flagship model: API11 Hull" == 1
+			"flagship attribute: shield generation" == 5000
+		label "waiting"
+		branch "waiting"
+			not "api11 woke"
+		assert
+			"api11 fail" == 0
+		# Load what taking off saved.
+		input
+			key escape
+		call "Load First Savegame"
+		assert
+			"api11 loads" == 2
+			"api11 fail" == 0
+			"ship model (all): API11 Hull" == 1
+			"outfit: API11 Core Plus" == 1
+			"outfit: API11 Plate" == 1
+			"outfit: API11 Battery" == 3
+		call "Depart"
+		assert
+			"flagship model: API11 Hull" == 1
+			"flagship attribute: shield generation" == 5000
+			"api11 fail" == 0

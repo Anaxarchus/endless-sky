@@ -117,6 +117,10 @@ public:
 	// mod loaders call (source/modding/es_api.h); a friend of Entity.
 	static void SetHull(Ship &ship, double value);
 	static void SetShields(Ship &ship, double value);
+	// Mod API 11: wake a disabled ship (not the player's) up: crew up to what it
+	// needs (at least one), hull a little above the level at which it is disabled
+	// (shields as they are), and no longer disabled. Answers whether it was.
+	static bool Reactivate(Ship &ship);
 	// What a shipyard charges for a brand-new ship of this model, when no used
 	// hull or outfits are in stock: its chassis and every outfit at full price
 	// (what stock depreciation answers when it holds no records). Mod API 9's

@@ -15,6 +15,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include "ModHarness.h"
 
+#include "CargoHold.h"
 #include "Color.h"
 #include "DataFile.h"
 #include "DataNode.h"
@@ -42,9 +43,11 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include "modding/ModBus.h"
 #include "modding/ModLoaders.h"
 #include "modding/ModState.h"
+#include "modding/RuntimeDefinitions.h"
 #include "Outfit.h"
 #include "Panel.h"
 #include "Planet.h"
+#include "Personality.h"
 #include "PlayerInfo.h"
 #include "Plugin.h"
 #include "PluginManager.h"
@@ -93,6 +96,23 @@ void ModHarness::SetHull(Ship &ship, double value)
 void ModHarness::SetShields(Ship &ship, double value)
 {
 	ship.levels.shields = clamp(value, 0., ship.MaxShields());
+}
+
+
+
+// Mod API 11: as a friendly ship's boarding repairs a disabled one
+// (Ship::Board), but with crew too, which a derelict may lack.
+bool ModHarness::Reactivate(Ship &ship)
+{
+	if(ship.IsYours() || ship.IsDestroyed() || !ship.IsDisabled())
+		return false;
+	const int needed = max(1, ship.RequiredCrew()) - ship.Crew();
+	if(needed > 0)
+		ship.AddCrew(needed);
+	const double maxHull = ship.MaxHull();
+	ship.levels.hull = min(max(ship.levels.hull, ship.minimumHull + .1 * maxHull), maxHull);
+	ship.isDisabled = false;
+	return !ship.IsDisabled();
 }
 
 
@@ -148,6 +168,8 @@ namespace {
 		bool landing = false;
 		// Set in the outfitter's hooks: its selected ships, the one in focus first.
 		const vector<Ship *> *outfitterShips = nullptr;
+		// Mod API 11: set in the save hook, where the player's things stay as they are.
+		bool saving = false;
 		Caches cache;
 	};
 	Context *context = nullptr;
@@ -412,7 +434,8 @@ namespace {
 	const Outfit *FindOutfit(const char *name)
 	{
 		const Outfit *outfit = name ? GameData::Outfits().Find(name) : nullptr;
-		return outfit && outfit->IsDefined() ? outfit : nullptr;
+		// Mod API 11: an outfit a mod defined for another pilot is not there for this one.
+		return outfit && outfit->IsDefined() && !RuntimeDefinitions::IsStale(outfit) ? outfit : nullptr;
 	}
 
 	// The one mod panel, and what it shows.
@@ -1523,6 +1546,7 @@ void ModHarness::Saving(const PlayerInfo &player)
 	// const method, and the hook may set the mods' data and the player's
 	// conditions, which are then written with the rest.
 	current.player = const_cast<PlayerInfo *>(&player);
+	current.saving = true;
 	context = &current;
 	loaders.Each([](const EsLoader &loader) {
 		if(ES_LOADER_HAS(&loader, save) && loader.save)
@@ -2918,7 +2942,7 @@ namespace {
 	const Ship *FindModel(const char *name)
 	{
 		const Ship *model = name && *name ? GameData::Ships().Find(name) : nullptr;
-		return model && model->IsValid() ? model : nullptr;
+		return model && model->IsValid() && !RuntimeDefinitions::IsStale(model) ? model : nullptr;
 	}
 
 	// The models a planet's shipyards sell, permanent and conditional, as the
@@ -3464,6 +3488,11 @@ namespace {
 			"call:ship_energy_fraction", "call:ship_fuel_fraction", "call:ship_park", "call:ship_parked",
 			"call:ship_remove", "call:timing_section", "call:trade_base_price", "call:trade_price",
 			"call:unlisten",
+			// Mod API 11.
+			"outfit_transfer", "runtime_definitions",
+			"call:define", "call:define_outfit_variant", "call:define_ship_variant", "call:defined",
+			"call:outfit_give", "call:outfit_take", "call:ship_replace_outfit",
+			"ship_reactivate", "call:ship_distance", "call:ship_reactivate", "call:ship_x", "call:ship_y",
 		};
 		return features;
 	}
@@ -3530,6 +3559,327 @@ double ES_CALL es_ship_fuel_fraction(int32_t i)
 	ES_CALL_TIMER;
 	const Ship *ship = GetShip(i);
 	return ship && ship->Attributes().Get("fuel capacity") > 0. ? ship->FuelFraction() : 0.;
+}
+
+
+
+// ---- Mod API 11 ----
+
+namespace {
+	// Mods defined outfits or ship models: what the harness found from the old
+	// ones goes (a shipyard's models, a fleet's strength), and an outfit with a
+	// new jump range changes which systems are neighbors.
+	void DefinitionsChanged(bool jumpRange)
+	{
+		if(jumpRange)
+			GameData::UpdateSystems();
+		ForgetWorld();
+		if(context)
+		{
+			context->cache.defense.clear();
+			context->cache.fleetStats.clear();
+		}
+	}
+
+	// Outfits a mod may move as goods: not maps or licenses, which the player
+	// holds as knowledge, not in a hold.
+	bool Movable(const Outfit *outfit)
+	{
+		return outfit && !outfit->Get("map") && !outfit->TrueName().ends_with(" License");
+	}
+
+	// Remove up to `count` of an outfit from a hold, without making an empty entry.
+	int TakeFrom(CargoHold &hold, const Outfit *outfit, int count)
+	{
+		return count > 0 && hold.Get(outfit) ? hold.Remove(outfit, count) : 0;
+	}
+
+	// Add outfits to a hold whatever its capacity, as missions' gifts do.
+	int GiveTo(CargoHold &hold, const Outfit *outfit, int count)
+	{
+		const int size = hold.Size();
+		hold.SetSize(-1);
+		const int added = hold.Add(outfit, count);
+		hold.SetSize(size);
+		return added;
+	}
+}
+
+
+
+int32_t ES_CALL es_define(const char *text)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod || !context || !text)
+		return 0;
+	bool jumpRange = false;
+	const int defined = RuntimeDefinitions::Define(mod, text, &context->player->Conditions(), jumpRange);
+	if(defined)
+		DefinitionsChanged(jumpRange);
+	return defined;
+}
+
+
+
+int32_t ES_CALL es_define_outfit_variant(const char *name, const char *base, const char *changes)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod || !context || !name || !base)
+		return 0;
+	bool jumpRange = false;
+	if(!RuntimeDefinitions::DefineOutfitVariant(mod, name, base, changes ? changes : "",
+			&context->player->Conditions(), jumpRange))
+		return 0;
+	DefinitionsChanged(jumpRange);
+	return 1;
+}
+
+
+
+int32_t ES_CALL es_define_ship_variant(const char *name, const char *base, const char *changes)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod || !context || !name || !base)
+		return 0;
+	if(!RuntimeDefinitions::DefineShipVariant(mod, name, base, changes ? changes : "",
+			&context->player->Conditions()))
+		return 0;
+	DefinitionsChanged(false);
+	return 1;
+}
+
+
+
+int32_t ES_CALL es_defined(const char *kind, const char *name)
+{
+	ES_CALL_TIMER;
+	if(!RunningMod() || !context || !kind || !name || !*name)
+		return 0;
+	return RuntimeDefinitions::Defined(kind, name);
+}
+
+
+
+int32_t ES_CALL es_ship_replace_outfit(const char *uuid, const char *from, const char *to, int32_t count)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod)
+		return 0;
+	// Only a hook the player started, while landed, as the outfitter works, and
+	// not one of the outfitter's own, whose panel holds what it shows of the ships.
+	if(!context || !context->ui || context->outfitterShips)
+		return 0;
+	PlayerInfo &player = *context->player;
+	Ship *ship = FindPlayerShip(uuid);
+	const Outfit *out = FindOutfit(from);
+	const Outfit *in = FindOutfit(to);
+	// The ship must be here, where the player could outfit it.
+	if(!ship || !player.GetPlanet() || ship->GetPlanet() != player.GetPlanet() || ship->IsDestroyed()
+			|| !out || !in || out == in || !Movable(in) || count <= 0)
+		return 0;
+	auto crewFor = [](const Outfit *outfit) -> int {
+		return outfit->Get("required crew") + outfit->Get("mandatory crew");
+	};
+	int replaced = 0;
+	for( ; replaced < count; ++replaced)
+	{
+		// Integrated outfits are installed for good.
+		if(ship->RemovableCount(out) <= 0)
+			break;
+		// What the outfitter checks to uninstall one and to install the other
+		// (outfit, weapon, engine and cargo space, the gun port or turret mount a
+		// weapon needs, "installable", crew, and every other attribute that may
+		// not go below its minimum), with both changes made.
+		const Outfit &attributes = ship->Attributes();
+		Outfit withoutOld = attributes;
+		withoutOld.Add(*out, -1);
+		if(withoutOld.CanAdd(*in, 1) < 1)
+			break;
+		Outfit withNew = attributes;
+		withNew.Add(*in, 1);
+		if(withNew.CanAdd(*out, -1) != -1)
+			break;
+
+		// As the outfitter uninstalls and installs.
+		ship->AddOutfit(out, -1);
+		if(crewFor(out))
+			ship->AddCrew(-crewFor(out));
+		ship->AddOutfit(in, 1);
+		const int required = crewFor(in);
+		if(required && ship->Crew() + required <= static_cast<int>(ship->Attributes().Get("bunks")))
+			ship->AddCrew(required);
+	}
+	if(replaced)
+	{
+		ship->Recharge();
+		// As leaving the outfitter does.
+		player.UpdateCargoCapacities();
+		Logger::Log("Mod \"" + string(mod) + "\" replaced " + to_string(replaced) + " \"" + out->TrueName()
+			+ "\" with \"" + in->TrueName() + "\" on the player's ship \"" + ship->GivenName() + "\".",
+			Logger::Level::INFO);
+	}
+	return replaced;
+}
+
+
+
+int32_t ES_CALL es_outfit_take(const char *outfit, int32_t count, const char *from)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod || !context || context->saving || !from || count <= 0)
+		return 0;
+	const Outfit *item = FindOutfit(outfit);
+	if(!item)
+		return 0;
+	PlayerInfo &player = *context->player;
+	const bool landed = player.GetPlanet();
+	const string where = from;
+	const bool cargo = (where == "cargo" || where == "any");
+	const bool storage = (where == "storage" || where == "any");
+	if(!cargo && !storage)
+		return 0;
+	int taken = 0;
+	if(cargo)
+	{
+		// Landed, the cargo is pooled; in flight, it is in the ships' holds (as es_cargo counts it).
+		taken += TakeFrom(player.Cargo(), item, count - taken);
+		if(!landed)
+			for(const shared_ptr<Ship> &ship : player.Ships())
+				if(ship && !ship->IsDestroyed() && !ship->IsParked() && ship->GetSystem() == player.GetSystem())
+					taken += TakeFrom(ship->Cargo(), item, count - taken);
+	}
+	if(storage && landed)
+	{
+		const auto &all = player.PlanetaryStorage();
+		auto it = all.find(player.GetPlanet());
+		if(it != all.end() && it->second.Get(item))
+			taken += TakeFrom(player.Storage(), item, count - taken);
+	}
+	return taken;
+}
+
+
+
+int32_t ES_CALL es_outfit_give(const char *outfit, int32_t count, const char *to)
+{
+	ES_CALL_TIMER;
+	const char *mod = RunningMod();
+	if(!mod || !context || context->saving || !to || count <= 0)
+		return 0;
+	const Outfit *item = FindOutfit(outfit);
+	if(!Movable(item))
+		return 0;
+	PlayerInfo &player = *context->player;
+	const string where = to;
+	if(where == "cargo")
+	{
+		// Landed, into the pooled cargo; in flight, into the flagship's hold.
+		if(player.GetPlanet())
+			return GiveTo(player.Cargo(), item, count);
+		Ship *flagship = player.Flagship();
+		return flagship ? GiveTo(flagship->Cargo(), item, count) : 0;
+	}
+	if(where == "storage" && player.GetPlanet())
+		return GiveTo(player.Storage(), item, count);
+	return 0;
+}
+
+
+
+double ES_CALL es_ship_distance(int32_t i)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = GetShip(i);
+	const Ship *flagship = context ? GetShip(context->flagship) : nullptr;
+	if(!ship || !flagship)
+		return -1.;
+	return ship->Position().Distance(flagship->Position());
+}
+
+
+
+double ES_CALL es_ship_x(int32_t i)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = GetShip(i);
+	return ship ? ship->Position().X() : 0.;
+}
+
+
+
+double ES_CALL es_ship_y(int32_t i)
+{
+	ES_CALL_TIMER;
+	const Ship *ship = GetShip(i);
+	return ship ? ship->Position().Y() : 0.;
+}
+
+
+
+int32_t ES_CALL es_ship_reactivate(int32_t i, const char *government, const char *personality)
+{
+	ES_CALL_TIMER;
+	Ship *ship = GetShip(i);
+	if(!ship || ship->IsYours() || ship->IsDestroyed() || !ship->IsDisabled())
+		return 0;
+	// Check what it is asked to become before changing anything.
+	const Government *to = nullptr;
+	if(government && *government)
+	{
+		to = FindGovernment(government);
+		if(!to)
+			return 0;
+	}
+	Personality newPersonality = ship->GetPersonality();
+	if(personality && *personality)
+	{
+		// The tokens of a personality node, e.g. "heroic staying".
+		istringstream in(string("personality ") + personality);
+		DataFile file(in);
+		bool parsed = false;
+		for(const DataNode &node : file)
+			if(node.Token(0) == "personality")
+			{
+				newPersonality = Personality();
+				newPersonality.Load(node);
+				parsed = true;
+				break;
+			}
+		if(!parsed)
+			return 0;
+	}
+	// A ship that wakes up is no longer a derelict: the AI leaves derelicts
+	// adrift, and missions count them as immobile.
+	if(newPersonality.IsDerelict())
+	{
+		DataNode remove;
+		remove.AddToken("remove");
+		remove.AddToken("derelict");
+		newPersonality.Load(remove);
+	}
+	if(!ModHarness::Reactivate(*ship))
+		return 0;
+	ship->SetPersonality(newPersonality);
+	if(to)
+	{
+		ship->SetGovernment(to);
+		// Its carried fighters and drones change sides with it.
+		for(const Ship::Bay &bay : ship->Bays())
+			if(bay.ship)
+				bay.ship->SetGovernment(to);
+	}
+	// What tagged ships can still fight changed.
+	if(context)
+	{
+		context->cache.tagsBuilt = false;
+		context->cache.tagStrength.clear();
+	}
+	return 1;
 }
 
 
@@ -3666,6 +4016,17 @@ namespace {
 		host.timing_section = es_timing_section;
 		host.ship_energy_fraction = es_ship_energy_fraction;
 		host.ship_fuel_fraction = es_ship_fuel_fraction;
+		host.define = es_define;
+		host.define_outfit_variant = es_define_outfit_variant;
+		host.define_ship_variant = es_define_ship_variant;
+		host.defined = es_defined;
+		host.ship_replace_outfit = es_ship_replace_outfit;
+		host.outfit_take = es_outfit_take;
+		host.outfit_give = es_outfit_give;
+		host.ship_distance = es_ship_distance;
+		host.ship_x = es_ship_x;
+		host.ship_y = es_ship_y;
+		host.ship_reactivate = es_ship_reactivate;
 		return host;
 	}
 }

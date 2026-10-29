@@ -71,6 +71,8 @@ class Visual;
 // for all other ships, so their capabilities are exactly the same  within the
 // limits of what the AI knows how to command them to do.
 class Ship : public Entity, public std::enable_shared_from_this<Ship> {
+	// Fork: mods define ship models at runtime (mod API 11).
+	friend class RuntimeDefinitionsDetail;
 public:
 	class Bay {
 	public:

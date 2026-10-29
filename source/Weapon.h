@@ -43,6 +43,8 @@ class Sprite;
 // string to double significantly reduces access time.
 class Weapon {
 	friend Outfit;
+	// Fork: mods' outfit variants (mod API 11) load on top of a copy of a weapon.
+	friend class RuntimeDefinitionsDetail;
 public:
 	struct Submunition {
 		explicit Submunition(const std::shared_ptr<const Weapon> &weapon, std::size_t count) noexcept

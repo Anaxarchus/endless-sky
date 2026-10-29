@@ -110,7 +110,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include <stdint.h>
 
 /* The mod API version this header describes, and the oldest the game accepts. */
-#define ES_API_VERSION 10
+#define ES_API_VERSION 11
 #define ES_API_MIN_VERSION 9
 
 /* The symbol a loader exports, and its type. */
@@ -506,6 +506,91 @@ typedef struct EsHost {
 	 * amounts.) */
 	double (ES_CALL *ship_energy_fraction)(int32_t i);
 	double (ES_CALL *ship_fuel_fraction)(int32_t i);
+
+	/* ---- Mod API 11 ----
+	 * Runtime outfits and ships, and moving outfits. A loader that also runs on
+	 * an older game checks these with ES_HOST_HAS (or api_has: "call:<field>",
+	 * "runtime_definitions", "outfit_transfer"). Every one is mod-scoped and needs
+	 * a world (a hook). Outfits and ship models are named by their true names.
+	 *
+	 * What mods define is saved with the pilot, before the pilot's ships, and
+	 * defined again as soon as the pilot loads, before anything in the save that
+	 * names it: a save never depends on a mod having run first. A definition
+	 * cannot change once made for the pilot (give a new version a new name). One
+	 * made for another pilot is gone for this one (unknown to these calls), and
+	 * this pilot may define the name anew. A shop that is open (the outfitter, the
+	 * shipyard) lists what is new only when it is opened again. */
+
+	/* Define outfits and ship models: `text` is one or more top-level nodes in
+	 * data-file syntax, each `outfit "<name>"`, `ship "<name>"` (a whole model)
+	 * or `ship "<base>" "<name>"` (the game's ship variant syntax). Outfits are
+	 * defined before ships, so a ship may install an outfit the same text
+	 * defines; a ship may install only defined outfits. Answers how many it
+	 * defined. A node is refused (and logged) when the game data or a plugin
+	 * defines its name, another mod defined it for this pilot, it does not parse,
+	 * or this mod defined it already with other text; the same text again is a
+	 * no-op that counts as defined. */
+	int32_t (ES_CALL *define)(const char *text); /* Mod-scoped. */
+	/* A new outfit `name`: a copy of the outfit `base` (from the game data, a
+	 * plugin, or defined at runtime) with `changes` applied, in the syntax of an
+	 * outfit node's children: attributes (`"shield generation" 2.4`, `cost
+	 * 300000`, `mass 20`), `"display name" "..."` (which gives it its own plural
+	 * unless `plural` is changed too), `description "..."` (which replaces the
+	 * base's), and a `weapon` block whose keys override the base weapon's (its
+	 * lists, such as effects and submunitions, add to the base's). Without a
+	 * display name it shows the base's. Saved as (name, base, changes), and so
+	 * derived from the base again on load. Answers 1 or 0, refused as define. */
+	int32_t (ES_CALL *define_outfit_variant)(const char *name, const char *base, const char *changes); /* Mod-scoped. */
+	/* Likewise for a ship model, loaded as the game loads `ship "<base>"
+	 * "<name>"` with `changes` as its children: what the changes leave out comes
+	 * from the base; what they give replaces the base's (an `outfits` block
+	 * replaces all its outfits; use `add attributes` to add to its attributes). */
+	int32_t (ES_CALL *define_ship_variant)(const char *name, const char *base, const char *changes); /* Mod-scoped. */
+	/* `kind` "outfit" or "ship": 0 unknown, 1 defined by the game data or a
+	 * plugin, 2 defined at runtime for this pilot (by any mod). */
+	int32_t (ES_CALL *defined)(const char *kind, const char *name); /* Mod-scoped. */
+	/* On one of the player's ships (UUID), landed where the player is: replace
+	 * up to `count` of the installed outfit `from` with `to`, one at a time, each
+	 * only if the ship can take it, as the outfitter checks (outfit, weapon,
+	 * engine and cargo space, a gun port or turret mount for a weapon, and every
+	 * other attribute that may not go below its minimum, with the old one out and
+	 * the new one in). Integrated outfits are not removable, and maps and
+	 * licenses cannot be installed. Answers how many were replaced. Only while
+	 * landed, in a hook the player started, and not in the outfitter's hooks.
+	 * Nothing is paid or sold. */
+	int32_t (ES_CALL *ship_replace_outfit)(const char *ship, const char *from, const char *to, int32_t count); /* Mod-scoped. */
+	/* Remove up to `count` of an outfit from the player's `from`: "cargo" (the
+	 * pooled cargo while landed; in flight, the holds of their ships in the
+	 * player's system that are not parked), "storage" (the planetary storage
+	 * where the player is landed; landed only), or "any" (cargo, then storage).
+	 * Never takes installed outfits. Answers how many were removed. In any hook
+	 * with a world (also on_enter while landing, and on_step), but not in save. */
+	int32_t (ES_CALL *outfit_take)(const char *outfit, int32_t count, const char *from); /* Mod-scoped. */
+	/* Add outfits to the player's `to`: "cargo" (the pooled cargo while landed,
+	 * else the flagship's hold, whatever their free space, as missions' gifts
+	 * do) or "storage" (landed only). Maps and licenses cannot be given. Answers
+	 * how many were added (0 for an unknown outfit). Where outfit_take works. */
+	int32_t (ES_CALL *outfit_give)(const char *outfit, int32_t count, const char *to); /* Mod-scoped. */
+
+	/* Ships waking up (also API 11; api_has "ship_reactivate"). Ship i's
+	 * distance (world units) from the player's flagship in this step's snapshot,
+	 * or -1 when the flagship is not in the system or i is out of range; and its
+	 * position (0 for an unknown index). */
+	double (ES_CALL *ship_distance)(int32_t i);
+	double (ES_CALL *ship_x)(int32_t i);
+	double (ES_CALL *ship_y)(int32_t i);
+	/* Bring disabled ship i, not the player's, back to life: crew up to what it
+	 * needs (at least 1), hull up to 10% of its maximum above the level at which
+	 * it is disabled (never above the maximum), shields as they are, and no
+	 * longer disabled, so it moves and fires again. A `government` ("" keeps
+	 * its own) takes it and its carried ships over; a `personality` ("" keeps
+	 * its own) is the tokens of a personality node, e.g. "heroic staying", and
+	 * replaces its personality. A ship that wakes up is never a derelict: the
+	 * "derelict" flag is dropped, so the AI flies it as any other ship. Its tag
+	 * stays. Answers 1, or 0 for an unknown index or government, an unparsable
+	 * personality, the player's ship, or a ship that is not disabled or is
+	 * destroyed. */
+	int32_t (ES_CALL *ship_reactivate)(int32_t i, const char *government, const char *personality);
 } EsHost;
 
 /* What a loader offers the game, filled in by es_loader_init. The game passes

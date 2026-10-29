@@ -443,6 +443,8 @@ target_sources(EndlessSkyLib PRIVATE
 	modding/ModLoaders.h
 	modding/ModState.cpp
 	modding/ModState.h
+	modding/RuntimeDefinitions.cpp
+	modding/RuntimeDefinitions.h
 	shader/BatchDrawList.cpp
 	shader/BatchDrawList.h
 	shader/BatchShader.cpp

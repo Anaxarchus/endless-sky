@@ -15,6 +15,8 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 
 #include "ModState.h"
 
+#include "RuntimeDefinitions.h"
+
 #include "../DataNode.h"
 #include "../DataWriter.h"
 #include "../GameData.h"
@@ -137,6 +139,7 @@ void ModState::Clear()
 	shipOrderNotes.clear();
 	outfitStockEnabled = false;
 	outfitStock.clear();
+	RuntimeDefinitions::NewPilot();
 	++generation;
 }
 
@@ -217,6 +220,20 @@ void ModState::Save(DataWriter &out)
 	// Shipyard and outfitter stock that mods keep with this pilot, sorted by name.
 	SaveStock(out, "ship stock", shipStock, [](const Ship *model) { return model->VariantName(); });
 	SaveStock(out, "outfit stock", outfitStock, [](const Outfit *outfit) { return outfit->TrueName(); });
+}
+
+
+
+void ModState::LoadDefinitions(const DataNode &child, const ConditionsStore *conditions)
+{
+	RuntimeDefinitions::Load(child, conditions);
+}
+
+
+
+void ModState::SaveDefinitions(DataWriter &out)
+{
+	RuntimeDefinitions::Save(out);
 }
 
 

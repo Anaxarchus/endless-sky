@@ -43,6 +43,8 @@ class Weapon;
 // information like the sprite to use in the outfitter panel for selling them,
 // or the sprite or sound to be used for an engine flare.
 class Outfit {
+	// Fork: mods' outfit variants (mod API 11) load on top of a copy of an outfit.
+	friend class RuntimeDefinitionsDetail;
 public:
 	// These are all the possible category strings for outfits.
 	static const std::vector<std::string> CATEGORIES;

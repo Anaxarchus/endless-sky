@@ -18,6 +18,7 @@ this program. If not, see <https://www.gnu.org/licenses/>.
 #include <cstdint>
 #include <string>
 
+class ConditionsStore;
 class DataNode;
 class DataWriter;
 class Outfit;
@@ -32,7 +33,10 @@ class Ship;
 // track (mod API 10). PlayerInfo clears, loads, saves and validates it with the
 // pilot, in the same blocks and order as always ("mod data", "ship stock", then
 // "outfit stock"). Without a mod, all of it stays empty and the shipyards and
-// outfitters behave as they always have. Main thread only.
+// outfitters behave as they always have. The outfits and ship models mods
+// define at runtime (mod API 11) are kept in RuntimeDefinitions, cleared with
+// the rest, and saved in a block of their own, written before the pilot's ships
+// and applied as soon as it is read. Main thread only.
 class ModState {
 public:
 	// Forget everything: a pilot is about to be made or loaded. Also moves
@@ -45,6 +49,11 @@ public:
 	static bool Load(const DataNode &child);
 	// Write our blocks, if there is anything to write.
 	static void Save(DataWriter &out);
+	// Mod API 11: load and apply the "runtime definitions" block (outfits and
+	// ship models mods defined), and write it. PlayerInfo writes it before the
+	// ships, and the rest of the save may name what it defines.
+	static void LoadDefinitions(const DataNode &child, const ConditionsStore *conditions);
+	static void SaveDefinitions(DataWriter &out);
 	// Drop stock for planets, models and outfits that are not valid; called once
 	// a loaded pilot's events have been applied.
 	static void Validate();
