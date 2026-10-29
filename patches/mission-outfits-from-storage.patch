@@ -1,0 +1,71 @@
+diff --git a/source/GameAction.cpp b/source/GameAction.cpp
+index 934ba88ad..840372cac 100644
+--- a/source/GameAction.cpp
++++ b/source/GameAction.cpp
+@@ -85,6 +85,20 @@ namespace {
+ 			cargo.Remove(outfit, moved);
+ 			didCargo = true;
+ 		}
++		// When landed, take what the cargo hold lacks from storage on this planet.
++		bool didStorage = false;
++		if(count < 0 && player.GetPlanet())
++		{
++			CargoHold &storage = player.Storage();
++			int stored = storage.Get(outfit);
++			if(stored)
++			{
++				int moved = min(stored, -count);
++				count += moved;
++				storage.Remove(outfit, moved);
++				didStorage = true;
++			}
++		}
+ 		while(count)
+ 		{
+ 			int moved = (count > 0) ? 1 : -1;
+@@ -112,12 +126,20 @@ namespace {
+ 				ui->Push(DialogPanel::Info(special));
+ 			}
+ 		}
+-		if(didCargo && didShip)
+-			message += "cargo hold and your flagship.";
+-		else if(didCargo)
+-			message += "cargo hold.";
+-		else
+-			message += "flagship.";
++		vector<string> places;
++		if(didCargo)
++			places.emplace_back("cargo hold");
++		if(didStorage)
++			places.emplace_back("storage");
++		if(didShip || places.empty())
++			places.emplace_back("flagship");
++		for(size_t i = 0; i < places.size(); ++i)
++		{
++			if(i)
++				message += (i + 1 == places.size()) ? " and your " : ", your ";
++			message += places[i];
++		}
++		message += ".";
+ 		Messages::Add({message, GameData::MessageCategories().Get("normal")});
+ 	}
+ }
+diff --git a/source/MissionAction.cpp b/source/MissionAction.cpp
+index 986393a73..a885e5d73 100644
+--- a/source/MissionAction.cpp
++++ b/source/MissionAction.cpp
+@@ -243,6 +243,14 @@ bool MissionAction::CanBeDone(const PlayerInfo &player, bool isFailed,
+ 		int available = flagship ? flagship->OutfitCount(it.first) : 0;
+ 		available += (boardingShip || !executeWhenLanded) ? flagship->Cargo().Get(it.first)
+ 				: CountInCargo(it.first, player);
++		// When landed, outfits kept in storage on this planet count too.
++		if(!boardingShip && player.GetPlanet())
++		{
++			const auto &storage = player.PlanetaryStorage();
++			auto stored = storage.find(player.GetPlanet());
++			if(stored != storage.end())
++				available += stored->second.Get(it.first);
++		}
+ 
+ 		if(available < -it.second)
+ 			return false;
