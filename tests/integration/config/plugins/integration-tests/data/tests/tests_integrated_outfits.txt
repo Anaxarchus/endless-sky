@@ -1,0 +1,75 @@
+# Copyright (c) 2026 by Anaxarchus
+#
+# Endless Sky is free software: you can redistribute it and/or modify it under the
+# terms of the GNU General Public License as published by the Free Software
+# Foundation, either version 3 of the License, or (at your option) any later version.
+#
+# Endless Sky is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+# PARTICULAR PURPOSE. See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License along with
+# this program. If not, see <https://www.gnu.org/licenses/>.
+
+test-data "Integrated Outfits Save"
+	category "savegame"
+	contents
+		pilot Bobbi Bughunter
+		date 11 7 3014
+		system Sol
+		planet Earth
+		clearance
+		ship Sparrow
+			name "Tester"
+			sprite ship/sparrow
+			attributes
+				category "Interceptor"
+				cost 100000
+				mass 100
+				bunks 2
+				drag 1
+				"engine capacity" 50
+				"fuel capacity" 400
+				"gun ports" 2
+				"heat dissipation" 0.8
+				hull 1000
+				"outfit space" 300
+				"required crew" 1
+				shields 1000
+				"weapon capacity" 100
+			outfits
+				"Heavy Laser" 2
+				"X1700 Ion Thruster"
+				Hyperdrive
+			integrated "Heavy Laser" 2
+				reduction 0.5
+			integrated "X1700 Ion Thruster" 1
+				reduction 0.25
+			crew 1
+			fuel 400
+			shields 1000
+			hull 1000
+			engine 0 20
+			gun -5 -20 "Heavy Laser"
+			gun 5 -20 "Heavy Laser"
+			system Sol
+			planet Earth
+		account
+			credits 1000
+			score 400
+			history
+		visited Sol
+		"visited planet" Earth
+
+
+test "Integrated Outfits Save Weapon And Engine Space"
+	status active
+	description "Integrated outfits give back a share of the outfit, weapon and engine space they use, and of their mass."
+	sequence
+		inject "Integrated Outfits Save"
+		call "Load First Savegame"
+		assert
+			"flagship attribute: weapon capacity" == 78000
+			"flagship attribute: engine capacity" == 38000
+			"flagship attribute: outfit space" == 246000
+			"flagship attribute: mass" == 154000

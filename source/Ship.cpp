@@ -4308,14 +4308,17 @@ Outfit Ship::IntegrationSavings(const Outfit &outfit, double reduction, int coun
 	Outfit savings;
 	if(count <= 0 || reduction <= 0.)
 		return savings;
-	// Each outfit saves a whole number of tons and of outfit space (rounding a
-	// half up). Capacities (weapon, engine, cargo) are left as they are.
+	// Each outfit saves a whole number of tons and of the outfit, weapon and
+	// engine space it uses (rounding a half up). Hardpoints are left as they are.
 	const double share = reduction / count;
 	if(outfit.Mass() > 0.)
 		savings.AddMass(-round(outfit.Mass() * share) * count);
-	double used = outfit.Get("outfit space");
-	if(used < 0.)
-		savings.Set("outfit space", round(-used * share) * count);
+	for(const char *space : {"outfit space", "weapon capacity", "engine capacity"})
+	{
+		double used = outfit.Get(space);
+		if(used < 0.)
+			savings.Set(space, round(-used * share) * count);
+	}
 	return savings;
 }
 

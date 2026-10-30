@@ -1,0 +1,137 @@
+From d1b4902568e2c4b66a4dceb19a591b97238e87c7 Mon Sep 17 00:00:00 2001
+From: Anaxarchus <mcclureisamuel@gmail.com>
+Date: Thu, 29 Oct 2026 20:41:40 -0800
+Subject: [PATCH] Integrated outfits save weapon and engine capacity too
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01H9LHWdhov7eiJ4GLVC1UDh
+---
+ source/Ship.cpp                               | 13 ++--
+ tests/CMakeLists.txt                          |  1 +
+ .../data/tests/tests_integrated_outfits.txt   | 75 +++++++++++++++++++
+ 3 files changed, 84 insertions(+), 5 deletions(-)
+ create mode 100644 tests/integration/config/plugins/integration-tests/data/tests/tests_integrated_outfits.txt
+
+diff --git a/source/Ship.cpp b/source/Ship.cpp
+index be68da16c..60bd3528d 100644
+--- a/source/Ship.cpp
++++ b/source/Ship.cpp
+@@ -4308,14 +4308,17 @@ Outfit Ship::IntegrationSavings(const Outfit &outfit, double reduction, int coun
+ 	Outfit savings;
+ 	if(count <= 0 || reduction <= 0.)
+ 		return savings;
+-	// Each outfit saves a whole number of tons and of outfit space (rounding a
+-	// half up). Capacities (weapon, engine, cargo) are left as they are.
++	// Each outfit saves a whole number of tons and of the outfit, weapon and
++	// engine space it uses (rounding a half up). Hardpoints are left as they are.
+ 	const double share = reduction / count;
+ 	if(outfit.Mass() > 0.)
+ 		savings.AddMass(-round(outfit.Mass() * share) * count);
+-	double used = outfit.Get("outfit space");
+-	if(used < 0.)
+-		savings.Set("outfit space", round(-used * share) * count);
++	for(const char *space : {"outfit space", "weapon capacity", "engine capacity"})
++	{
++		double used = outfit.Get(space);
++		if(used < 0.)
++			savings.Set(space, round(-used * share) * count);
++	}
+ 	return savings;
+ }
+ 
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 62f911a45..cdc2d6aa6 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -77,6 +77,7 @@ list(APPEND INTEGRATION_TESTS
+ 	integration/config/plugins/integration-tests/data/tests/tests_to_accept.txt
+ 	integration/config/plugins/integration-tests/data/tests/tests_wormhole_navigation.txt
+ 	integration/config/plugins/integration-tests/data/tests/tests_installed_plugin.txt
++	integration/config/plugins/integration-tests/data/tests/tests_integrated_outfits.txt
+ )
+ 
+ target_include_directories(EndlessSkyTests PRIVATE unit/include)
+diff --git a/tests/integration/config/plugins/integration-tests/data/tests/tests_integrated_outfits.txt b/tests/integration/config/plugins/integration-tests/data/tests/tests_integrated_outfits.txt
+new file mode 100644
+index 000000000..c52bce439
+--- /dev/null
++++ b/tests/integration/config/plugins/integration-tests/data/tests/tests_integrated_outfits.txt
+@@ -0,0 +1,75 @@
++# Copyright (c) 2026 by Anaxarchus
++#
++# Endless Sky is free software: you can redistribute it and/or modify it under the
++# terms of the GNU General Public License as published by the Free Software
++# Foundation, either version 3 of the License, or (at your option) any later version.
++#
++# Endless Sky is distributed in the hope that it will be useful, but WITHOUT ANY
++# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
++# PARTICULAR PURPOSE. See the GNU General Public License for more details.
++#
++# You should have received a copy of the GNU General Public License along with
++# this program. If not, see <https://www.gnu.org/licenses/>.
++
++test-data "Integrated Outfits Save"
++	category "savegame"
++	contents
++		pilot Bobbi Bughunter
++		date 11 7 3014
++		system Sol
++		planet Earth
++		clearance
++		ship Sparrow
++			name "Tester"
++			sprite ship/sparrow
++			attributes
++				category "Interceptor"
++				cost 100000
++				mass 100
++				bunks 2
++				drag 1
++				"engine capacity" 50
++				"fuel capacity" 400
++				"gun ports" 2
++				"heat dissipation" 0.8
++				hull 1000
++				"outfit space" 300
++				"required crew" 1
++				shields 1000
++				"weapon capacity" 100
++			outfits
++				"Heavy Laser" 2
++				"X1700 Ion Thruster"
++				Hyperdrive
++			integrated "Heavy Laser" 2
++				reduction 0.5
++			integrated "X1700 Ion Thruster" 1
++				reduction 0.25
++			crew 1
++			fuel 400
++			shields 1000
++			hull 1000
++			engine 0 20
++			gun -5 -20 "Heavy Laser"
++			gun 5 -20 "Heavy Laser"
++			system Sol
++			planet Earth
++		account
++			credits 1000
++			score 400
++			history
++		visited Sol
++		"visited planet" Earth
++
++
++test "Integrated Outfits Save Weapon And Engine Space"
++	status active
++	description "Integrated outfits give back a share of the outfit, weapon and engine space they use, and of their mass."
++	sequence
++		inject "Integrated Outfits Save"
++		call "Load First Savegame"
++		assert
++			"flagship attribute: weapon capacity" == 78000
++			"flagship attribute: engine capacity" == 38000
++			"flagship attribute: outfit space" == 246000
++			"flagship attribute: mass" == 154000
+-- 
+2.43.0
+
